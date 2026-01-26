@@ -9,10 +9,12 @@ export type {
   TransportMode,
   Good,
   GoodFamily,
-  GoodState,
-  SupplyLevel,
-  PriceSnapshot,
   Population,
   FacilityType,
   NaturalResource,
+  // New types for visualization
+  FacilitySnapshot,
+  MarketPriceSnapshot,
+  LaborMarket,
+  GoodMarket,
 } from "./wasm/sim_core";

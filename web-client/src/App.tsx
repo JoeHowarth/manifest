@@ -1,7 +1,15 @@
 import { useEffect, useState, useCallback } from "react";
 import { GameView } from "./components/GameView";
 import { Sidebar } from "./components/Sidebar";
+import { SelectionPanel } from "./components/panels/SelectionPanel";
 import type { StateSnapshot } from "./types";
+
+export type SelectionItem =
+  | { type: "settlement"; id: number }
+  | { type: "ship"; id: number };
+
+// Array of selections, ordered by when they were opened (newest last)
+export type Selection = SelectionItem[];
 
 // Dynamic import for WASM module
 const initWasm = async () => {
@@ -20,6 +28,42 @@ function App() {
   const [state, setState] = useState<StateSnapshot | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selection, setSelection] = useState<Selection>([]);
+
+  // Toggle a selection - add if not present, remove if present
+  const toggleSelection = useCallback((item: SelectionItem | null) => {
+    if (item === null) return;
+    setSelection((prev) => {
+      const exists = prev.some((s) => s.type === item.type && s.id === item.id);
+      if (exists) {
+        return prev.filter((s) => !(s.type === item.type && s.id === item.id));
+      }
+      return [...prev, item];
+    });
+  }, []);
+
+  // Remove a specific selection by index or item
+  const removeSelection = useCallback((item: SelectionItem) => {
+    setSelection((prev) =>
+      prev.filter((s) => !(s.type === item.type && s.id === item.id))
+    );
+  }, []);
+
+  // Close the most recently opened selection (for ESC key)
+  const closeLastSelection = useCallback(() => {
+    setSelection((prev) => prev.slice(0, -1));
+  }, []);
+
+  // ESC key handler
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        closeLastSelection();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [closeLastSelection]);
 
   useEffect(() => {
     initWasm()
@@ -71,10 +115,23 @@ function App() {
         display: "flex",
         width: "100%",
         height: "100%",
+        position: "relative",
       }}
     >
-      <GameView state={state} />
-      <Sidebar state={state} onAdvanceTick={advanceTick} />
+      <GameView state={state} selection={selection} onSelect={toggleSelection} />
+      <SelectionPanel
+        state={state}
+        selection={selection}
+        onToggle={toggleSelection}
+        onRemove={removeSelection}
+        tick={state.tick}
+      />
+      <Sidebar
+        state={state}
+        selection={selection}
+        onSelect={toggleSelection}
+        onAdvanceTick={advanceTick}
+      />
     </div>
   );
 }

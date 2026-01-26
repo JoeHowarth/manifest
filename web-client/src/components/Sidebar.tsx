@@ -1,11 +1,23 @@
 import type { StateSnapshot } from "../types";
+import type { Selection, SelectionItem } from "../App";
 
 interface SidebarProps {
   state: StateSnapshot;
+  selection: Selection;
+  onSelect: (item: SelectionItem | null) => void;
   onAdvanceTick: () => void;
 }
 
-export function Sidebar({ state, onAdvanceTick }: SidebarProps) {
+function isSelected(selection: Selection, type: SelectionItem["type"], id: number): boolean {
+  return selection.some((s) => s.type === type && s.id === id);
+}
+
+export function Sidebar({
+  state,
+  selection,
+  onSelect,
+  onAdvanceTick,
+}: SidebarProps) {
   const playerOrg = state.orgs[0];
 
   return (
@@ -15,11 +27,11 @@ export function Sidebar({ state, onAdvanceTick }: SidebarProps) {
         height: "100%",
         backgroundColor: "#16213e",
         borderLeft: "1px solid #0f3460",
-        padding: 16,
         color: "#e4e4e4",
         fontFamily: "system-ui, sans-serif",
         fontSize: 14,
         overflowY: "auto",
+        padding: 16,
       }}
     >
       <h1
@@ -78,14 +90,20 @@ export function Sidebar({ state, onAdvanceTick }: SidebarProps) {
             const location = state.settlements.find(
               (s) => s.id === ship.location
             );
+            const selected = isSelected(selection, "ship", ship.id);
             return (
               <div
                 key={ship.id}
+                onClick={() => onSelect({ type: "ship", id: ship.id })}
                 style={{
                   padding: 8,
-                  backgroundColor: "#1a1a2e",
+                  backgroundColor: selected ? "#2a3a5e" : "#1a1a2e",
                   borderRadius: 4,
                   marginBottom: 8,
+                  cursor: "pointer",
+                  border: selected
+                    ? "1px solid #4a90a4"
+                    : "1px solid transparent",
                 }}
               >
                 <div style={{ fontWeight: 500, marginBottom: 4 }}>
@@ -103,25 +121,35 @@ export function Sidebar({ state, onAdvanceTick }: SidebarProps) {
 
       {/* Settlements */}
       <Section title="Settlements">
-        {state.settlements.map((settlement) => (
-          <div
-            key={settlement.id}
-            style={{
-              padding: 8,
-              backgroundColor: "#1a1a2e",
-              borderRadius: 4,
-              marginBottom: 8,
-            }}
-          >
-            <div style={{ fontWeight: 500, marginBottom: 4 }}>
-              {settlement.name}
+        {state.settlements.map((settlement) => {
+          const selected = isSelected(selection, "settlement", settlement.id);
+          return (
+            <div
+              key={settlement.id}
+              onClick={() =>
+                onSelect({ type: "settlement", id: settlement.id })
+              }
+              style={{
+                padding: 8,
+                backgroundColor: selected ? "#2a3a5e" : "#1a1a2e",
+                borderRadius: 4,
+                marginBottom: 8,
+                cursor: "pointer",
+                border: selected
+                  ? "1px solid #4a90a4"
+                  : "1px solid transparent",
+              }}
+            >
+              <div style={{ fontWeight: 500, marginBottom: 4 }}>
+                {settlement.name}
+              </div>
+              <div style={{ fontSize: 12, color: "#aaa" }}>
+                Pop: {settlement.population.toLocaleString()} · Wealth:{" "}
+                {settlement.wealth.toFixed(1)}
+              </div>
             </div>
-            <div style={{ fontSize: 12, color: "#aaa" }}>
-              Pop: {settlement.population.toLocaleString()} · Wealth:{" "}
-              {settlement.wealth.toFixed(1)}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </Section>
     </div>
   );
