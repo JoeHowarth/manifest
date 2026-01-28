@@ -1,9 +1,14 @@
 use serde::{Deserialize, Serialize};
 use slotmap::SlotMap;
+use std::collections::HashMap;
 use tsify_next::Tsify;
 
-use crate::entities::{Facility, Org, Route, Settlement, Ship};
-use crate::types::{FacilityId, FacilityType, Good, OrgId, SettlementId, ShipId, ShipStatus};
+use crate::entities::{Facility, Org, Route, Settlement, Ship, Stockpile, StockpileKey};
+use crate::market::MarketPrice;
+use crate::types::{
+    FacilityId, FacilityType, Good, KeyToU64, LocationId, OrgId, OrgType, SettlementId, ShipId,
+    ShipStatus,
+};
 
 // ============================================================================
 // Recipe - Production formulas for facilities
@@ -24,14 +29,14 @@ pub fn get_recipe(facility_type: FacilityType) -> Recipe {
         FacilityType::Farm => Recipe {
             inputs: vec![],
             output: Good::Grain,
-            base_output: 20.0,
-            optimal_workforce: 10,
+            base_output: 70.0,      // Enough to feed mills
+            optimal_workforce: 150, // Labor-intensive agriculture
         },
         FacilityType::Fishery => Recipe {
             inputs: vec![],
             output: Good::Fish,
-            base_output: 15.0,
-            optimal_workforce: 8,
+            base_output: 30.0,      // Enough for bakeries
+            optimal_workforce: 100, // Labor-intensive fishing
         },
         FacilityType::LumberCamp => Recipe {
             inputs: vec![],
@@ -55,8 +60,8 @@ pub fn get_recipe(facility_type: FacilityType) -> Recipe {
         FacilityType::Mill => Recipe {
             inputs: vec![(Good::Grain, 1.5)], // 1.5 grain per flour
             output: Good::Flour,
-            base_output: 12.0,
-            optimal_workforce: 4,
+            base_output: 40.0,     // Enough to feed bakeries
+            optimal_workforce: 80, // Labor-intensive milling
         },
         FacilityType::Foundry => Recipe {
             inputs: vec![(Good::Ore, 2.0)], // 2 ore per iron
@@ -74,8 +79,8 @@ pub fn get_recipe(facility_type: FacilityType) -> Recipe {
         FacilityType::Bakery => Recipe {
             inputs: vec![(Good::Flour, 0.8), (Good::Fish, 0.3)], // Makes provisions
             output: Good::Provisions,
-            base_output: 15.0,
-            optimal_workforce: 5,
+            base_output: 40.0,      // Enough for local consumption + export surplus
+            optimal_workforce: 100, // Labor-intensive baking
         },
         FacilityType::Toolsmith => Recipe {
             inputs: vec![(Good::Lumber, 0.5), (Good::Iron, 0.5)],
@@ -89,6 +94,13 @@ pub fn get_recipe(facility_type: FacilityType) -> Recipe {
             output: Good::Ships,
             base_output: 0.5, // Ships are slow to build
             optimal_workforce: 15,
+        },
+        // Special - subsistence farming (handled separately, but needs a recipe)
+        FacilityType::SubsistenceFarm => Recipe {
+            inputs: vec![], // No inputs
+            output: Good::Provisions,
+            base_output: 1.0, // 1 provision per worker at peak (before diminishing returns)
+            optimal_workforce: u32::MAX, // No limit - accepts all unassigned workers
         },
     }
 }
@@ -115,6 +127,12 @@ pub struct GameState {
     pub ships: SlotMap<ShipId, Ship>,
     pub facilities: SlotMap<FacilityId, Facility>,
     pub orgs: SlotMap<OrgId, Org>,
+
+    // v2: Location-based stockpiles (org_id, location) -> stockpile
+    pub stockpiles: HashMap<StockpileKey, Stockpile>,
+
+    // v2: Market prices per settlement per good
+    pub market_prices: HashMap<(u64, Good), MarketPrice>, // (settlement_id, good) -> price
 }
 
 impl GameState {
@@ -126,7 +144,47 @@ impl GameState {
             ships: SlotMap::with_key(),
             facilities: SlotMap::with_key(),
             orgs: SlotMap::with_key(),
+            stockpiles: HashMap::new(),
+            market_prices: HashMap::new(),
         }
+    }
+
+    // v2: Stockpile access helpers
+
+    /// Get or create a stockpile for an org at a location
+    pub fn get_stockpile_mut(&mut self, org_id: OrgId, location: LocationId) -> &mut Stockpile {
+        let key = (org_id.to_u64(), location);
+        self.stockpiles.entry(key).or_insert_with(Stockpile::new)
+    }
+
+    /// Get a stockpile for an org at a location (read-only)
+    pub fn get_stockpile(&self, org_id: OrgId, location: LocationId) -> Option<&Stockpile> {
+        let key = (org_id.to_u64(), location);
+        self.stockpiles.get(&key)
+    }
+
+    /// Get market price for a good at a settlement, or default
+    pub fn get_market_price(&self, settlement_id: SettlementId, good: Good) -> f32 {
+        let key = (settlement_id.to_u64(), good);
+        self.market_prices
+            .get(&key)
+            .map(|mp| mp.last_price)
+            .unwrap_or_else(|| crate::market::default_price(good))
+    }
+
+    /// Update market price after a transaction
+    pub fn update_market_price(
+        &mut self,
+        settlement_id: SettlementId,
+        good: Good,
+        price: f32,
+        quantity: f32,
+    ) {
+        let key = (settlement_id.to_u64(), good);
+        self.market_prices
+            .entry(key)
+            .or_insert_with(|| MarketPrice::new(good, price))
+            .update(price, quantity);
     }
 }
 
@@ -209,4 +267,5 @@ pub struct OrgSnapshot {
     pub id: u64,
     pub name: String,
     pub treasury: f32,
+    pub org_type: OrgType, // v2: Regular or Settlement
 }
