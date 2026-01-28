@@ -18,89 +18,81 @@ use crate::types::{
 pub struct Recipe {
     pub inputs: Vec<(Good, f32)>, // (good, amount per unit output)
     pub output: Good,
-    pub base_output: f32,       // Units produced per tick at full efficiency
-    pub optimal_workforce: u32, // Workers needed for full production
+    pub output_per_worker: f32, // Units produced per worker per tick (at/below optimal)
+    pub taper: f32,             // Diminishing returns rate beyond optimal (2.0 = steep, 0.5 = gentle)
+}
+
+impl Recipe {
+    /// Total output for a given number of workers at a facility with optimal_workforce workers.
+    /// Below optimal: linear (each worker = output_per_worker).
+    /// Above optimal: diminishing returns via exponential taper.
+    pub fn total_output(&self, workers: f32, optimal_workforce: u32) -> f32 {
+        let optimal = optimal_workforce as f32;
+        if optimal <= 0.0 || workers <= 0.0 {
+            return 0.0;
+        }
+        if workers <= optimal {
+            workers * self.output_per_worker
+        } else {
+            let base = optimal * self.output_per_worker;
+            let excess = workers - optimal;
+            // Integral of output_per_worker * e^(-taper * x / optimal) from 0 to excess
+            let scale = optimal / self.taper.max(0.01);
+            let bonus = self.output_per_worker * scale * (1.0 - (-self.taper * excess / optimal).exp());
+            base + bonus
+        }
+    }
+
+    /// Marginal output of the next worker (for MVP calculation).
+    pub fn marginal_output(&self, current_workers: f32, optimal_workforce: u32) -> f32 {
+        let optimal = optimal_workforce as f32;
+        if current_workers < optimal {
+            self.output_per_worker
+        } else {
+            let excess = current_workers - optimal;
+            self.output_per_worker * (-self.taper * excess / optimal.max(1.0)).exp()
+        }
+    }
 }
 
 /// Get the production recipe for a facility type
 pub fn get_recipe(facility_type: FacilityType) -> Recipe {
     match facility_type {
         // Primary extraction (no inputs)
+        // Output rates tuned so full chain (Farm→Mill→Bakery+Fishery) yields
+        // ~2 provisions/worker, vs subsistence at 1 provision/worker.
         FacilityType::Farm => Recipe {
             inputs: vec![],
             output: Good::Grain,
-            base_output: 70.0,      // Enough to feed mills
-            optimal_workforce: 150, // Labor-intensive agriculture
+            output_per_worker: 7.16,
+            taper: 2.0,
         },
         FacilityType::Fishery => Recipe {
             inputs: vec![],
             output: Good::Fish,
-            base_output: 30.0,      // Enough for bakeries
-            optimal_workforce: 100, // Labor-intensive fishing
+            output_per_worker: 4.60,
+            taper: 2.0,
         },
-        FacilityType::LumberCamp => Recipe {
-            inputs: vec![],
-            output: Good::Lumber, // Produces lumber directly for simplicity
-            base_output: 12.0,
-            optimal_workforce: 6,
-        },
-        FacilityType::Mine => Recipe {
-            inputs: vec![],
-            output: Good::Ore,
-            base_output: 10.0,
-            optimal_workforce: 8,
-        },
-        FacilityType::Pasture => Recipe {
-            inputs: vec![],
-            output: Good::Wool,
-            base_output: 8.0,
-            optimal_workforce: 4,
-        },
-        // Processing (transforms inputs)
+        // Processing
         FacilityType::Mill => Recipe {
             inputs: vec![(Good::Grain, 1.5)], // 1.5 grain per flour
             output: Good::Flour,
-            base_output: 40.0,     // Enough to feed bakeries
-            optimal_workforce: 80, // Labor-intensive milling
-        },
-        FacilityType::Foundry => Recipe {
-            inputs: vec![(Good::Ore, 2.0)], // 2 ore per iron
-            output: Good::Iron,
-            base_output: 8.0,
-            optimal_workforce: 6,
-        },
-        FacilityType::Weaver => Recipe {
-            inputs: vec![(Good::Wool, 1.2)], // 1.2 wool per cloth
-            output: Good::Cloth,
-            base_output: 10.0,
-            optimal_workforce: 5,
+            output_per_worker: 7.67,
+            taper: 2.0,
         },
         // Finished goods
         FacilityType::Bakery => Recipe {
-            inputs: vec![(Good::Flour, 0.8), (Good::Fish, 0.3)], // Makes provisions
+            inputs: vec![(Good::Flour, 0.8), (Good::Fish, 0.3)],
             output: Good::Provisions,
-            base_output: 40.0,      // Enough for local consumption + export surplus
-            optimal_workforce: 100, // Labor-intensive baking
-        },
-        FacilityType::Toolsmith => Recipe {
-            inputs: vec![(Good::Lumber, 0.5), (Good::Iron, 0.5)],
-            output: Good::Tools,
-            base_output: 6.0,
-            optimal_workforce: 4,
-        },
-        // Capital goods
-        FacilityType::Shipyard => Recipe {
-            inputs: vec![(Good::Lumber, 5.0), (Good::Iron, 2.0), (Good::Cloth, 1.0)],
-            output: Good::Ships,
-            base_output: 0.5, // Ships are slow to build
-            optimal_workforce: 15,
+            output_per_worker: 6.14,
+            taper: 2.0,
         },
         // Special - subsistence farming (handled separately, but needs a recipe)
         FacilityType::SubsistenceFarm => Recipe {
-            inputs: vec![], // No inputs
+            inputs: vec![],
             output: Good::Provisions,
-            base_output: 1.0, // 1 provision per worker at peak (before diminishing returns)
-            optimal_workforce: u32::MAX, // No limit - accepts all unassigned workers
+            output_per_worker: 1.0, // placeholder - actual production is custom code
+            taper: 2.0,
         },
     }
 }

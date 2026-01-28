@@ -401,13 +401,6 @@ fn generate_facility_priorities(state: &GameState, org_id: u64) -> HashMap<u64, 
                 Some(FacilityType::Mill) => 1,    // Second - flour for bakeries
                 Some(FacilityType::Farm) => 2,    // Third - grain for mills
                 Some(FacilityType::Fishery) => 2, // Third - fish for bakeries
-                Some(FacilityType::Foundry) => 3, // Lower - iron (not critical yet)
-                Some(FacilityType::Weaver) => 3,  // Lower - cloth (not critical yet)
-                Some(FacilityType::LumberCamp) => 3,
-                Some(FacilityType::Mine) => 3,
-                Some(FacilityType::Pasture) => 3,
-                Some(FacilityType::Toolsmith) => 4,
-                Some(FacilityType::Shipyard) => 5, // Lowest - capital goods
                 Some(FacilityType::SubsistenceFarm) => 100, // Not prioritized - fallback only
                 None => 99,
             }
@@ -474,22 +467,15 @@ pub fn generate_population_goods_bids(
     population: &Population,
     settlement_id: SettlementId,
     provisions_price: f32, // Last clearing price
-    cloth_price: f32,
 ) -> Vec<Bid> {
     let mut bids = Vec::new();
 
     // Stock ratio determines urgency (shifts price range up/down)
     let provisions_stock_ratio =
         population.stockpile_provisions / population.target_provisions.max(1.0);
-    let cloth_stock_ratio = population.stockpile_cloth / population.target_cloth.max(1.0);
 
     // Budget based on wealth
-    let total_budget = population.wealth * 0.3;
-
-    // ========== PROVISIONS DEMAND CURVE ==========
-    // Each bucket represents willingness to buy at that price using the FULL budget.
-    // Budget constraint is enforced during trade execution, not here.
-    let provisions_budget = total_budget * 0.8;
+    let provisions_budget = population.wealth * 0.3;
     let n_buckets = 5;
 
     // Urgency shifts price range: low stock = willing to pay more
@@ -507,29 +493,6 @@ pub fn generate_population_goods_bids(
             bids.push(Bid {
                 buyer: EntityId::from_population(settlement_id),
                 good: Good::Provisions,
-                quantity,
-                max_price: price,
-            });
-        }
-    }
-
-    // ========== CLOTH DEMAND CURVE ==========
-    let cloth_budget = total_budget * 0.2;
-    let cloth_n_buckets = 3;
-
-    let cloth_urgency = (1.0 - cloth_stock_ratio).clamp(0.0, 1.0);
-    let cloth_center = cloth_price * (1.0 + cloth_urgency * 0.2);
-    let cloth_spread = 0.15;
-
-    for i in 0..cloth_n_buckets {
-        let t = i as f32 / (cloth_n_buckets - 1).max(1) as f32;
-        let price = cloth_center * (1.0 + cloth_spread - t * 2.0 * cloth_spread);
-        let quantity = cloth_budget / price.max(0.01); // Full budget at this price
-
-        if quantity > 0.1 && price > 0.1 {
-            bids.push(Bid {
-                buyer: EntityId::from_population(settlement_id),
-                good: Good::Cloth,
                 quantity,
                 max_price: price,
             });
@@ -560,6 +523,7 @@ pub fn generate_facility_labor_bids(
 
     // Check input availability from org's stockpile
     let stockpile = state.get_stockpile(org_id, LocationId::from_settlement(settlement_id));
+    let gross_output = recipe.total_output(facility.optimal_workforce as f32, facility.optimal_workforce);
     let input_eff = if recipe.inputs.is_empty() {
         1.0 // Extraction facilities have no inputs
     } else {
@@ -567,7 +531,7 @@ pub fn generate_facility_labor_bids(
             .inputs
             .iter()
             .map(|(good, ratio)| {
-                let needed = recipe.base_output * ratio;
+                let needed = gross_output * ratio;
                 let available = stockpile.map(|s| s.get(*good)).unwrap_or(0.0);
                 (available / needed.max(0.01)).min(1.0)
             })
@@ -578,7 +542,7 @@ pub fn generate_facility_labor_bids(
         return vec![]; // No inputs, no labor demand
     }
 
-    // Calculate MVP
+    // Calculate MVP using marginal output at current staffing level
     let output_price = state.get_market_price(settlement_id, recipe.output);
     let input_cost: f32 = recipe
         .inputs
@@ -587,8 +551,8 @@ pub fn generate_facility_labor_bids(
         .sum();
 
     let effective_workers = facility.optimal_workforce as f32 * input_eff;
-    let marginal_output = recipe.base_output / facility.optimal_workforce.max(1) as f32;
-    let mvp = marginal_output * (output_price - input_cost);
+    let marginal = recipe.marginal_output(facility.current_workforce as f32, facility.optimal_workforce);
+    let mvp = marginal * (output_price - input_cost);
 
     // Only bid if profitable above subsistence
     if mvp <= SUBSISTENCE_WAGE {
@@ -660,7 +624,8 @@ pub fn generate_org_input_bids(
 
         for (input_good, ratio) in &recipe.inputs {
             let current = stockpile.map(|s| s.get(*input_good)).unwrap_or(0.0);
-            let target = recipe.base_output * ratio * INPUT_TARGET_TICKS;
+            let full_output = recipe.total_output(facility.optimal_workforce as f32, facility.optimal_workforce);
+            let target = full_output * ratio * INPUT_TARGET_TICKS;
             let shortfall = target - current;
 
             if shortfall <= 0.0 {
@@ -743,7 +708,8 @@ pub fn generate_org_output_asks(
         let output_good = recipe.output;
 
         let current = stockpile.map(|s| s.get(output_good)).unwrap_or(0.0);
-        let target = recipe.base_output * OUTPUT_TARGET_TICKS;
+        let full_output = recipe.total_output(facility.optimal_workforce as f32, facility.optimal_workforce);
+        let target = full_output * OUTPUT_TARGET_TICKS;
         let surplus = current - target;
 
         if surplus <= 0.0 {

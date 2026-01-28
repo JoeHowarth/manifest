@@ -19,12 +19,10 @@ pub struct Population {
 
     // Household stockpiles (separate from org stockpiles)
     pub stockpile_provisions: f32, // Household food reserves
-    pub stockpile_cloth: f32,      // Household cloth reserves
 
     // Targets for behavior curves
     pub target_wealth: f32,     // Comfortable savings level
     pub target_provisions: f32, // Desired food buffer
-    pub target_cloth: f32,      // Desired cloth buffer
 }
 
 impl Default for Population {
@@ -33,27 +31,23 @@ impl Default for Population {
             count: 1000,
             wealth: 50000.0,              // Start with ~2.5 ticks of wages (wage=20)
             stockpile_provisions: 2000.0, // 2 ticks buffer (1 per person per tick)
-            stockpile_cloth: 200.0,       // 2 ticks buffer
             target_wealth: 50000.0,       // ~2.5 ticks of wages
             target_provisions: 2000.0,    // 2 ticks buffer
-            target_cloth: 200.0,          // 2 ticks buffer
         }
     }
 }
 
 impl Population {
     /// Create a population with count and scaled defaults
-    /// Consumption: 1 provision per person per tick, cloth/10 per person per tick
+    /// Consumption: 1 provision per person per tick
     pub fn with_count(count: u32) -> Self {
         let pop = count as f32;
         Self {
             count,
-            wealth: pop * 50.0,                // ~2.5 ticks of wages
-            stockpile_provisions: pop * 2.0,   // 2 ticks buffer
-            stockpile_cloth: pop / 10.0 * 2.0, // 2 ticks buffer
+            wealth: pop * 50.0,              // ~2.5 ticks of wages
+            stockpile_provisions: pop * 2.0, // 2 ticks buffer
             target_wealth: pop * 50.0,
             target_provisions: pop * 2.0,
-            target_cloth: pop / 10.0 * 2.0,
         }
     }
 }

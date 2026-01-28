@@ -52,19 +52,10 @@ pub enum Good {
     // Primary
     Grain,
     Fish,
-    Timber,
-    Ore,
-    Wool,
     // Processed
     Flour,
-    Lumber,
-    Iron,
-    Cloth,
     // Finished
     Provisions,
-    Tools,
-    // Capital
-    Ships,
     // Special - traded via auction but not stockpiled
     Labor,
 }
@@ -75,7 +66,6 @@ pub enum GoodFamily {
     BulkStaples,
     ProcessedMaterials,
     FinishedGoods,
-    CapitalGoods,
 }
 
 /// Family for labor - separate from physical goods
@@ -89,13 +79,10 @@ pub enum GoodKind {
 impl Good {
     pub fn family(&self) -> GoodFamily {
         match self {
-            Good::Grain | Good::Fish | Good::Timber | Good::Ore | Good::Wool => {
-                GoodFamily::BulkStaples
-            }
-            Good::Flour | Good::Lumber | Good::Iron | Good::Cloth => GoodFamily::ProcessedMaterials,
-            Good::Provisions | Good::Tools => GoodFamily::FinishedGoods,
-            Good::Ships => GoodFamily::CapitalGoods,
-            Good::Labor => GoodFamily::BulkStaples, // Doesn't really apply, but need a value
+            Good::Grain | Good::Fish => GoodFamily::BulkStaples,
+            Good::Flour => GoodFamily::ProcessedMaterials,
+            Good::Provisions => GoodFamily::FinishedGoods,
+            Good::Labor => GoodFamily::BulkStaples,
         }
     }
 
@@ -111,16 +98,8 @@ impl Good {
         [
             Good::Grain,
             Good::Fish,
-            Good::Timber,
-            Good::Ore,
-            Good::Wool,
             Good::Flour,
-            Good::Lumber,
-            Good::Iron,
-            Good::Cloth,
             Good::Provisions,
-            Good::Tools,
-            Good::Ships,
             Good::Labor,
         ]
         .into_iter()
@@ -141,9 +120,6 @@ impl Good {
 pub enum NaturalResource {
     FertileLand, // Enables grain production
     Fishery,     // Enables fishing
-    Forest,      // Enables timber
-    OreDeposit,  // Enables mining
-    Pastureland, // Enables wool/livestock
 }
 
 // ============================================================================
@@ -179,18 +155,10 @@ pub enum FacilityType {
     // Primary (extraction)
     Farm,
     Fishery,
-    LumberCamp,
-    Mine,
-    Pasture,
     // Processing
     Mill,
-    Foundry,
-    Weaver,
     // Finished
     Bakery,
-    Toolsmith,
-    // Capital
-    Shipyard,
     // Special - owned by Settlement Org, fallback for unassigned workers
     SubsistenceFarm,
 }

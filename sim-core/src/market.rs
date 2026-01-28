@@ -120,19 +120,11 @@ impl MarketPrice {
 /// Get default initial price for a good
 pub fn default_price(good: Good) -> f32 {
     match good {
-        Good::Provisions => 20.0, // Anchored to subsistence wage
-        Good::Labor => 20.0,      // Subsistence wage
         Good::Grain => 15.0,
         Good::Fish => 15.0,
         Good::Flour => 18.0,
-        Good::Cloth => 25.0,
-        Good::Timber => 10.0,
-        Good::Lumber => 15.0,
-        Good::Ore => 12.0,
-        Good::Iron => 20.0,
-        Good::Wool => 12.0,
-        Good::Tools => 30.0,
-        Good::Ships => 500.0,
+        Good::Provisions => 20.0, // Anchored to subsistence wage
+        Good::Labor => 20.0,      // Subsistence wage
     }
 }
 
