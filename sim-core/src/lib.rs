@@ -4,12 +4,14 @@ use wasm_bindgen::prelude::*;
 mod ai;
 mod entities;
 mod market;
+mod pops;
 mod state;
 mod types;
 
 pub use ai::*;
 pub use entities::*;
 pub use market::*;
+pub use pops::*;
 pub use state::*;
 pub use types::*;
 
@@ -2127,11 +2129,8 @@ mod tests {
                 let provisions_price = sim.state.get_market_price(settlement_id, Good::Provisions);
 
                 // Generate bids for inspection
-                let pop_bids = ai::generate_population_goods_bids(
-                    pop,
-                    settlement_id,
-                    provisions_price,
-                );
+                let pop_bids =
+                    ai::generate_population_goods_bids(pop, settlement_id, provisions_price);
                 let settlement_asks = ai::generate_settlement_org_asks(&sim.state, settlement_id);
 
                 println!("\n  === BIDS/ASKS at tick {} ===", tick);

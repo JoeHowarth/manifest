@@ -1,0 +1,170 @@
+use std::collections::HashMap;
+
+use super::{ConsumptionResult, GoodId, Need, Price, Quantity};
+
+// === GOOD PROFILES ===
+
+pub struct NeedContribution {
+    pub need_id: String,
+    pub efficiency: f64, // units of need satisfaction per unit good
+}
+
+pub struct GoodProfile {
+    pub good: GoodId,
+    pub contributions: Vec<NeedContribution>,
+}
+
+// === CONSTANTS ===
+
+const BUFFER_TICKS: f64 = 5.0;
+
+// === STOCKPILE BIAS ===
+
+/// Compute biased prices for actual consumption based on stockpile vs target.
+///
+/// - Low stock relative to target → higher virtual price → consume less (save buffer)
+/// - High stock relative to target → lower virtual price → consume more (draw down excess)
+fn biased_prices(
+    stocks: &HashMap<GoodId, Quantity>,
+    desired_ema: &HashMap<GoodId, Quantity>,
+    base_prices: &HashMap<GoodId, Price>,
+) -> HashMap<GoodId, Price> {
+    base_prices
+        .iter()
+        .map(|(&good, &price)| {
+            let stock = stocks.get(&good).copied().unwrap_or(0.0);
+            let target = desired_ema.get(&good).copied().unwrap_or(1.0) * BUFFER_TICKS;
+            let ratio = if target > 0.0 {
+                (stock / target).clamp(0.2, 5.0)
+            } else {
+                1.0
+            };
+            // Low stock → ratio < 1 → price / ratio > price → consume less
+            // High stock → ratio > 1 → price / ratio < price → consume more
+            (good, price / ratio)
+        })
+        .collect()
+}
+
+// === CONSUMPTION ===
+
+/// Greedy consumption: iteratively pick the good with highest marginal utility per price.
+///
+/// - `prices`: used to compute MU/price score for ranking
+/// - `budget`: if Some, stops when budget exhausted (for desire discovery)
+pub fn greedy_consume(
+    stocks: &HashMap<GoodId, Quantity>,
+    good_profiles: &[GoodProfile],
+    needs: &HashMap<String, Need>,
+    need_satisfaction: &mut HashMap<String, f64>,
+    prices: &HashMap<GoodId, Price>,
+    budget: Option<f64>,
+) -> HashMap<GoodId, Quantity> {
+    let mut remaining_stocks = stocks.clone();
+    let mut consumed: HashMap<GoodId, Quantity> = HashMap::new();
+    let mut remaining_budget = budget.unwrap_or(f64::INFINITY);
+
+    loop {
+        let mut best: Option<(GoodId, f64, f64)> = None; // (good, score, price)
+
+        for profile in good_profiles {
+            let available = remaining_stocks.get(&profile.good).copied().unwrap_or(0.0);
+            if available <= 0.0 {
+                continue;
+            }
+
+            let price = prices.get(&profile.good).copied().unwrap_or(1.0).max(0.001);
+
+            // Skip if we can't afford any of this good
+            if remaining_budget < price * 0.01 {
+                continue;
+            }
+
+            // Sum marginal utility across all needs this good serves
+            let mut total_mu = 0.0;
+            for contrib in &profile.contributions {
+                if let Some(need) = needs.get(&contrib.need_id) {
+                    let current = need_satisfaction
+                        .get(&contrib.need_id)
+                        .copied()
+                        .unwrap_or(0.0);
+                    total_mu += contrib.efficiency * need.utility_curve.marginal_utility(current);
+                }
+            }
+
+            let score = total_mu / price;
+
+            if score > 0.0 && best.is_none_or(|(_, best_score, _)| score > best_score) {
+                best = Some((profile.good, score, price));
+            }
+        }
+
+        match best {
+            Some((good, _, price)) => {
+                let available = remaining_stocks.get(&good).copied().unwrap_or(0.0);
+                // Consume up to 1 unit, but respect budget and availability
+                let max_by_budget = remaining_budget / price;
+                let delta = available.min(1.0).min(max_by_budget);
+
+                if delta < 0.001 {
+                    break;
+                }
+
+                *remaining_stocks.get_mut(&good).unwrap() -= delta;
+                *consumed.entry(good).or_insert(0.0) += delta;
+                remaining_budget -= delta * price;
+
+                // Update need satisfaction
+                let profile = good_profiles.iter().find(|p| p.good == good).unwrap();
+                for contrib in &profile.contributions {
+                    *need_satisfaction
+                        .entry(contrib.need_id.clone())
+                        .or_insert(0.0) += contrib.efficiency * delta;
+                }
+            }
+            None => break,
+        }
+    }
+
+    consumed
+}
+
+/// Compute consumption for a population tick.
+///
+/// - Discovery pass: real stocks, budget = income_ema, market prices → `desired`
+///   (What would I buy with my typical income at current prices?)
+/// - Actual pass: real stocks, no budget, biased prices → `actual`
+///   (Consume from stockpile, conserving when low, indulging when abundant)
+pub fn compute_consumption(
+    stocks: &HashMap<GoodId, Quantity>,
+    good_profiles: &[GoodProfile],
+    needs: &HashMap<String, Need>,
+    need_satisfaction: &mut HashMap<String, f64>,
+    price_ema: &HashMap<GoodId, Price>,
+    income_ema: f64,
+    desired_ema: &HashMap<GoodId, Quantity>,
+) -> ConsumptionResult {
+    // Discovery pass: what would I buy with income_ema at current prices?
+    let mut discovery_satisfaction = need_satisfaction.clone();
+    let desired = greedy_consume(
+        stocks,
+        good_profiles,
+        needs,
+        &mut discovery_satisfaction,
+        price_ema,
+        Some(income_ema),
+    );
+
+    // Actual pass: consume from stockpile with bias based on buffer levels
+    let biased = biased_prices(stocks, desired_ema, price_ema);
+    let actual = greedy_consume(
+        stocks,
+        good_profiles,
+        needs,
+        need_satisfaction,
+        &biased,
+        None, // no budget for actual consumption
+    );
+
+    ConsumptionResult { actual, desired }
+}
