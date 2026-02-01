@@ -1,116 +1,20 @@
 use std::collections::{HashMap, HashSet};
 
-use super::market::{PriceBias, clear_single_market};
-use super::types::{Order, Price, Side};
+use crate::pops::market::{clear_single_market, PriceBias};
+use crate::pops::types::Price;
 
-// === SKILL TYPES ===
+use super::production_fn::ProductionFn;
+use super::skills::{SkillDef, SkillId, Worker, WorkerId};
 
-#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
-pub struct SkillId(pub u32);
-
-pub struct SkillDef {
-    pub id: SkillId,
-    pub name: String,
-    pub parent: Option<SkillId>, // None for root (e.g., Laborer)
-}
-
-impl SkillDef {
-    /// Returns all ancestor skills (including self)
-    pub fn skill_chain<'a>(&self, all_skills: &'a HashMap<SkillId, SkillDef>) -> Vec<&'a SkillDef> {
-        let mut chain = vec![];
-        let mut current = all_skills.get(&self.id);
-        while let Some(skill) = current {
-            chain.push(skill);
-            current = skill.parent.and_then(|p| all_skills.get(&p));
-        }
-        chain
-    }
-}
-
-// === WORKER & FACILITY ===
-
-#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
-pub struct WorkerId(pub u32);
+// === FACILITY (labor-specific) ===
 
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
 pub struct FacilityId(pub u32);
-
-pub struct Worker {
-    pub id: WorkerId,
-    pub skills: HashSet<SkillId>, // all skills including inherited
-    pub min_wage: Price,          // reservation wage
-}
 
 pub struct Facility {
     pub id: FacilityId,
     pub currency: f64,
     pub workers: HashMap<SkillId, u32>, // current employees by primary skill
-}
-
-// === PRODUCTION FUNCTION ===
-
-/// Defines how a facility converts workers into output
-pub trait ProductionFn {
-    /// Compute output given worker counts by skill
-    fn compute(&self, workers: &HashMap<SkillId, u32>) -> f64;
-
-    /// Skills this production function uses
-    fn relevant_skills(&self) -> Vec<SkillId>;
-}
-
-/// Simple production function with complementarity
-/// Output = sum of individual contributions + bonus for combinations
-pub struct ComplementaryProductionFn {
-    /// Base output per worker of each skill type
-    pub base_output: HashMap<SkillId, f64>,
-
-    /// Bonus output for having workers of multiple skill types
-    /// Key: (skill_a, skill_b), Value: bonus per pair
-    pub complementarity_bonus: HashMap<(SkillId, SkillId), f64>,
-
-    /// Maximum workers before diminishing returns kick in
-    pub max_optimal_capacity: HashMap<SkillId, u32>,
-
-    /// How quickly output diminishes after max capacity (0 = cliff, 1 = gradual)
-    pub diminishing_rate: f64,
-}
-
-impl ProductionFn for ComplementaryProductionFn {
-    fn compute(&self, workers: &HashMap<SkillId, u32>) -> f64 {
-        let mut output = 0.0;
-
-        // Base output with diminishing returns
-        for (skill, &count) in workers {
-            let base = self.base_output.get(skill).copied().unwrap_or(0.0);
-            let max_cap = self.max_optimal_capacity.get(skill).copied().unwrap_or(10);
-
-            for i in 0..count {
-                if i < max_cap {
-                    output += base;
-                } else {
-                    // Linear diminishing returns after capacity
-                    let over = i - max_cap + 1;
-                    let factor = (1.0 - self.diminishing_rate * over as f64).max(0.0);
-                    output += base * factor;
-                }
-            }
-        }
-
-        // Complementarity bonuses
-        for ((skill_a, skill_b), bonus) in &self.complementarity_bonus {
-            let count_a = workers.get(skill_a).copied().unwrap_or(0);
-            let count_b = workers.get(skill_b).copied().unwrap_or(0);
-            // Bonus applies to each pair
-            let pairs = count_a.min(count_b);
-            output += *bonus * pairs as f64;
-        }
-
-        output
-    }
-
-    fn relevant_skills(&self) -> Vec<SkillId> {
-        self.base_output.keys().copied().collect()
-    }
 }
 
 // === LABOR ORDERS ===
@@ -306,7 +210,9 @@ pub struct LaborMarketResult {
 }
 
 /// Convert labor bids/asks to generic Orders for the auction
-fn to_orders(bids: &[LaborBid], asks: &[LaborAsk], skill: SkillId) -> Vec<Order> {
+fn to_orders(bids: &[LaborBid], asks: &[LaborAsk], skill: SkillId) -> Vec<crate::pops::market::Order> {
+    use crate::pops::market::{Order, Side};
+
     let mut orders = Vec::new();
 
     for bid in bids.iter().filter(|b| b.skill == skill) {
@@ -342,6 +248,8 @@ pub fn clear_labor_markets(
     wage_emas: &HashMap<SkillId, Price>,
     facility_budgets: &HashMap<FacilityId, f64>,
 ) -> LaborMarketResult {
+    use crate::pops::market::Side;
+
     // 1. Order skills by wage EMA descending (specialists first)
     let mut skill_order: Vec<_> = skills.iter().map(|s| s.id).collect();
     skill_order.sort_by(|a, b| {
@@ -744,6 +652,8 @@ mod tests {
 
     #[test]
     fn complementarity_increases_output() {
+        use super::super::production_fn::ComplementaryProductionFn;
+
         let laborer = SkillId(1);
         let craftsman = SkillId(2);
 
@@ -758,6 +668,7 @@ mod tests {
         let just_craftsman: HashMap<SkillId, u32> = [(craftsman, 1)].into();
         let both: HashMap<SkillId, u32> = [(laborer, 1), (craftsman, 1)].into();
 
+        use super::super::production_fn::ProductionFn;
         let output_laborer = prod_fn.compute(&just_laborer);
         let output_craftsman = prod_fn.compute(&just_craftsman);
         let output_both = prod_fn.compute(&both);
@@ -818,6 +729,8 @@ mod tests {
 
     #[test]
     fn diminishing_returns_past_capacity() {
+        use super::super::production_fn::ComplementaryProductionFn;
+
         let laborer = SkillId(1);
 
         let prod_fn = ComplementaryProductionFn {
@@ -832,6 +745,7 @@ mod tests {
         let three: HashMap<SkillId, u32> = [(laborer, 3)].into();
         let four: HashMap<SkillId, u32> = [(laborer, 4)].into();
 
+        use super::super::production_fn::ProductionFn;
         let out_1 = prod_fn.compute(&one);
         let out_2 = prod_fn.compute(&two);
         let out_3 = prod_fn.compute(&three);

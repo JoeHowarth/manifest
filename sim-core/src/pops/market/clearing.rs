@@ -1,4 +1,9 @@
-pub use super::*;
+use std::collections::HashMap;
+
+use crate::pops::agents::{MerchantAgent, PopulationState};
+use crate::pops::types::{AgentId, GoodId, Price};
+
+use super::orders::{Fill, Order, Side};
 
 // === SINGLE MARKET CLEARING ===
 

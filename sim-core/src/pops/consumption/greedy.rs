@@ -1,18 +1,8 @@
 use std::collections::HashMap;
 
-use super::{ConsumptionResult, GoodId, Need, Price, Quantity};
-
-// === GOOD PROFILES ===
-
-pub struct NeedContribution {
-    pub need_id: String,
-    pub efficiency: f64, // units of need satisfaction per unit good
-}
-
-pub struct GoodProfile {
-    pub good: GoodId,
-    pub contributions: Vec<NeedContribution>,
-}
+use crate::pops::agents::ConsumptionResult;
+use crate::pops::needs::Need;
+use crate::pops::types::{GoodId, GoodProfile, Price, Quantity};
 
 // === CONSTANTS ===
 

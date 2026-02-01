@@ -1,12 +1,3 @@
-use std::collections::HashMap;
-
-// === CORE TYPES ===
-
-pub type GoodId = u32;
-pub type AgentId = u32;
-pub type Price = f64;
-pub type Quantity = f64;
-
 // === NEEDS & UTILITY ===
 
 pub enum UtilityCurve {
@@ -56,64 +47,4 @@ impl UtilityCurve {
 pub struct Need {
     pub id: String,
     pub utility_curve: UtilityCurve,
-}
-
-// === CONSUMPTION ===
-
-pub struct ConsumptionResult {
-    pub actual: HashMap<GoodId, Quantity>,
-    pub desired: HashMap<GoodId, Quantity>,
-}
-
-// === AGENTS ===
-
-pub struct PopulationState {
-    pub id: AgentId,
-    pub currency: f64,
-    pub stocks: HashMap<GoodId, Quantity>,
-    pub desired_consumption_ema: HashMap<GoodId, Quantity>,
-    pub need_satisfaction: HashMap<String, f64>,
-    /// Smoothed income used as budget for desire discovery and market purchases.
-    /// TODO: Update this after income events (wages, sales) with:
-    ///   income_ema = 0.8 * income_ema + 0.2 * income_this_tick
-    pub income_ema: f64,
-}
-
-pub struct MerchantAgent {
-    pub id: AgentId,
-    pub currency: f64,
-    pub stocks: HashMap<GoodId, Quantity>,
-}
-
-impl MerchantAgent {
-    pub fn generate_orders(&self, _price_ema: &HashMap<GoodId, Price>) -> Vec<Order> {
-        Vec::new()
-    }
-}
-
-// === ORDERS & FILLS ===
-
-#[derive(Clone)]
-pub struct Order {
-    pub id: u64,
-    pub agent_id: AgentId,
-    pub good: GoodId,
-    pub side: Side,
-    pub quantity: Quantity,
-    pub limit_price: Price,
-}
-
-#[derive(Clone, Copy)]
-pub enum Side {
-    Buy,
-    Sell,
-}
-
-pub struct Fill {
-    pub order_id: u64,
-    pub agent_id: AgentId,
-    pub good: GoodId,
-    pub side: Side,
-    pub quantity: Quantity,
-    pub price: Price,
 }
