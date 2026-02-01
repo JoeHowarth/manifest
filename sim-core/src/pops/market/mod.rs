@@ -4,4 +4,4 @@ pub mod settlement;
 
 pub use clearing::*;
 pub use orders::*;
-pub use settlement::*;
+// settlement module is a stub - no exports yet

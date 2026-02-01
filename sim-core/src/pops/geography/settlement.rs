@@ -1,7 +1,6 @@
 // Settlement type for multi-location economy
 
-use crate::pops::agents::PopulationState;
-use crate::pops::types::SettlementId;
+use crate::pops::types::{PopId, SettlementId};
 
 /// A node in the trade network
 #[derive(Debug, Clone)]
@@ -9,7 +8,7 @@ pub struct Settlement {
     pub id: SettlementId,
     pub name: String,
     pub position: (f64, f64),
-    pub population: PopulationState,
+    pub pop_ids: Vec<PopId>,
     pub natural_resources: Vec<NaturalResource>,
 }
 
@@ -19,13 +18,13 @@ impl Settlement {
             id,
             name: name.into(),
             position,
-            population: PopulationState::default(),
+            pop_ids: Vec::new(),
             natural_resources: Vec::new(),
         }
     }
 
-    pub fn with_population(mut self, population: PopulationState) -> Self {
-        self.population = population;
+    pub fn with_pops(mut self, pop_ids: Vec<PopId>) -> Self {
+        self.pop_ids = pop_ids;
         self
     }
 

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::pops::market::{clear_single_market, PriceBias};
+use crate::pops::market::{PriceBias, clear_single_market};
 use crate::pops::types::Price;
 
 use super::production_fn::ProductionFn;
@@ -210,7 +210,11 @@ pub struct LaborMarketResult {
 }
 
 /// Convert labor bids/asks to generic Orders for the auction
-fn to_orders(bids: &[LaborBid], asks: &[LaborAsk], skill: SkillId) -> Vec<crate::pops::market::Order> {
+fn to_orders(
+    bids: &[LaborBid],
+    asks: &[LaborAsk],
+    skill: SkillId,
+) -> Vec<crate::pops::market::Order> {
     use crate::pops::market::{Order, Side};
 
     let mut orders = Vec::new();

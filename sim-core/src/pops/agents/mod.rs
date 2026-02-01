@@ -1,7 +1,7 @@
 pub mod merchant;
-pub mod population;
+pub mod pop;
 pub mod stockpile;
 
 pub use merchant::*;
-pub use population::*;
+pub use pop::*;
 pub use stockpile::*;

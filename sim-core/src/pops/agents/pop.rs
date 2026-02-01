@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::pops::types::{AgentId, GoodId, Quantity};
+use crate::pops::types::{GoodId, PopId, Quantity, SettlementId};
 
 // === CONSUMPTION ===
 
@@ -9,25 +9,27 @@ pub struct ConsumptionResult {
     pub desired: HashMap<GoodId, Quantity>,
 }
 
-// === AGENTS ===
+// === POP ===
 
+/// A population unit (~100 workers + dependents) bound to a settlement.
+/// Makes consumption decisions, participates in labor markets as 1 worker.
 #[derive(Debug, Clone)]
-pub struct PopulationState {
-    pub id: AgentId,
+pub struct Pop {
+    pub id: PopId,
+    pub home_settlement: SettlementId,
     pub currency: f64,
     pub stocks: HashMap<GoodId, Quantity>,
     pub desired_consumption_ema: HashMap<GoodId, Quantity>,
     pub need_satisfaction: HashMap<String, f64>,
     /// Smoothed income used as budget for desire discovery and market purchases.
-    /// TODO: Update this after income events (wages, sales) with:
-    ///   income_ema = 0.8 * income_ema + 0.2 * income_this_tick
     pub income_ema: f64,
 }
 
-impl Default for PopulationState {
-    fn default() -> Self {
+impl Pop {
+    pub fn new(id: PopId, home_settlement: SettlementId) -> Self {
         Self {
-            id: 0,
+            id,
+            home_settlement,
             currency: 1000.0,
             stocks: HashMap::new(),
             desired_consumption_ema: HashMap::new(),
@@ -35,18 +37,14 @@ impl Default for PopulationState {
             income_ema: 100.0,
         }
     }
-}
-
-impl PopulationState {
-    pub fn new(id: AgentId) -> Self {
-        Self {
-            id,
-            ..Default::default()
-        }
-    }
 
     pub fn with_currency(mut self, currency: f64) -> Self {
         self.currency = currency;
+        self
+    }
+
+    pub fn with_stocks(mut self, stocks: HashMap<GoodId, Quantity>) -> Self {
+        self.stocks = stocks;
         self
     }
 }

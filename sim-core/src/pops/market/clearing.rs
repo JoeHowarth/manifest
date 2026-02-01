@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use crate::pops::agents::{MerchantAgent, PopulationState};
-use crate::pops::types::{AgentId, GoodId, Price};
+use crate::pops::agents::{MerchantAgent, Pop};
+use crate::pops::types::{AgentId, GoodId, Price, SettlementId};
 
 use super::orders::{Fill, Order, Side};
 
@@ -138,6 +138,7 @@ pub fn clear_single_market(
 // === AGENT BUDGET STATE ===
 
 struct AgentBudget {
+    #[allow(dead_code)] // Stored for debugging
     agent_id: AgentId,
     currency: f64,
 
@@ -296,7 +297,7 @@ pub fn clear_multi_market(
 
 // === FILL APPLICATION ===
 
-pub fn apply_fill(pop: &mut PopulationState, fill: &Fill) {
+pub fn apply_fill(pop: &mut Pop, fill: &Fill) {
     match fill.side {
         Side::Buy => {
             pop.currency -= fill.quantity * fill.price;
@@ -309,15 +310,27 @@ pub fn apply_fill(pop: &mut PopulationState, fill: &Fill) {
     }
 }
 
-pub fn apply_fill_merchant(merchant: &mut MerchantAgent, fill: &Fill) {
+/// Apply a fill to a merchant at a specific settlement.
+/// Merchants have per-settlement stockpiles, so settlement context is required.
+pub fn apply_fill_merchant(merchant: &mut MerchantAgent, settlement: SettlementId, fill: &Fill) {
+    // Update currency first (before borrowing stockpile)
     match fill.side {
         Side::Buy => {
             merchant.currency -= fill.quantity * fill.price;
-            *merchant.stocks.entry(fill.good).or_insert(0.0) += fill.quantity;
         }
         Side::Sell => {
             merchant.currency += fill.quantity * fill.price;
-            *merchant.stocks.entry(fill.good).or_insert(0.0) -= fill.quantity;
+        }
+    }
+
+    // Then update stockpile
+    let stockpile = merchant.stockpile_at(settlement);
+    match fill.side {
+        Side::Buy => {
+            stockpile.add(fill.good, fill.quantity);
+        }
+        Side::Sell => {
+            stockpile.remove(fill.good, fill.quantity);
         }
     }
 }

@@ -2,9 +2,9 @@
 
 use std::collections::HashMap;
 
-use crate::pops::agents::{Stockpile, StockpileKey};
+use crate::pops::agents::{MerchantAgent, Pop};
 use crate::pops::geography::{Route, Settlement};
-use crate::pops::types::{GoodId, LocationId, Price, SettlementId};
+use crate::pops::types::{GoodId, MerchantId, PopId, Price, SettlementId};
 
 /// Complete state of the economic simulation
 #[derive(Debug, Clone)]
@@ -15,14 +15,17 @@ pub struct World {
     pub settlements: HashMap<SettlementId, Settlement>,
     pub routes: Vec<Route>,
 
-    // Distributed state
-    pub stockpiles: HashMap<StockpileKey, Stockpile>,
+    // Agents
+    pub pops: HashMap<PopId, Pop>,
+    pub merchants: HashMap<MerchantId, MerchantAgent>,
 
     // Market state per settlement
     pub price_ema: HashMap<(SettlementId, GoodId), Price>,
 
     // ID counters
     next_settlement_id: u32,
+    next_pop_id: u32,
+    next_merchant_id: u32,
 }
 
 impl Default for World {
@@ -37,16 +40,23 @@ impl World {
             tick: 0,
             settlements: HashMap::new(),
             routes: Vec::new(),
-            stockpiles: HashMap::new(),
+            pops: HashMap::new(),
+            merchants: HashMap::new(),
             price_ema: HashMap::new(),
             next_settlement_id: 0,
+            next_pop_id: 0,
+            next_merchant_id: 0,
         }
     }
 
     // === Settlement Management ===
 
     /// Add a settlement to the world, returns its ID
-    pub fn add_settlement(&mut self, name: impl Into<String>, position: (f64, f64)) -> SettlementId {
+    pub fn add_settlement(
+        &mut self,
+        name: impl Into<String>,
+        position: (f64, f64),
+    ) -> SettlementId {
         let id = SettlementId::new(self.next_settlement_id);
         self.next_settlement_id += 1;
 
@@ -93,26 +103,65 @@ impl World {
             .collect()
     }
 
-    // === Stockpile Management ===
+    // === Pop Management ===
 
-    /// Get or create a stockpile for an agent at a location
-    pub fn get_stockpile_mut(&mut self, key: StockpileKey) -> &mut Stockpile {
-        self.stockpiles.entry(key).or_default()
+    /// Add a pop to a settlement, returns its ID
+    pub fn add_pop(&mut self, settlement_id: SettlementId) -> Option<PopId> {
+        let settlement = self.settlements.get_mut(&settlement_id)?;
+
+        let id = PopId::new(self.next_pop_id);
+        self.next_pop_id += 1;
+
+        let pop = Pop::new(id, settlement_id);
+        self.pops.insert(id, pop);
+        settlement.pop_ids.push(id);
+
+        Some(id)
     }
 
-    /// Get a stockpile for an agent at a location (read-only)
-    pub fn get_stockpile(&self, key: StockpileKey) -> Option<&Stockpile> {
-        self.stockpiles.get(&key)
+    /// Get a pop by ID
+    pub fn get_pop(&self, id: PopId) -> Option<&Pop> {
+        self.pops.get(&id)
     }
 
-    /// Convenience: get stockpile at a settlement
-    pub fn stockpile_at_settlement(
-        &mut self,
-        agent_id: crate::pops::types::AgentId,
-        settlement_id: SettlementId,
-    ) -> &mut Stockpile {
-        let key = (agent_id, LocationId::settlement(settlement_id));
-        self.get_stockpile_mut(key)
+    /// Get a mutable reference to a pop
+    pub fn get_pop_mut(&mut self, id: PopId) -> Option<&mut Pop> {
+        self.pops.get_mut(&id)
+    }
+
+    /// Get all pops at a settlement
+    pub fn pops_at_settlement(&self, settlement_id: SettlementId) -> Vec<&Pop> {
+        self.settlements
+            .get(&settlement_id)
+            .map(|s| {
+                s.pop_ids
+                    .iter()
+                    .filter_map(|id| self.pops.get(id))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    // === Merchant Management ===
+
+    /// Add a merchant to the world, returns its ID
+    pub fn add_merchant(&mut self) -> MerchantId {
+        let id = MerchantId::new(self.next_merchant_id);
+        self.next_merchant_id += 1;
+
+        let merchant = MerchantAgent::new(id);
+        self.merchants.insert(id, merchant);
+        id
+    }
+
+    /// Get a merchant by ID
+    pub fn get_merchant(&self, id: MerchantId) -> Option<&MerchantAgent> {
+        self.merchants.get(&id)
+    }
+
+    /// Get a mutable reference to a merchant
+    pub fn get_merchant_mut(&mut self, id: MerchantId) -> Option<&mut MerchantAgent> {
+        self.merchants.get_mut(&id)
     }
 
     // === Price Management ===
@@ -163,19 +212,55 @@ mod tests {
     }
 
     #[test]
-    fn test_stockpiles() {
+    fn test_pops() {
         let mut world = World::new();
         let london = world.add_settlement("London", (0.0, 0.0));
 
-        let agent_id = 1;
-        let grain = 1;
+        // Add pops to london
+        let pop1 = world.add_pop(london).unwrap();
+        let pop2 = world.add_pop(london).unwrap();
 
-        // Add goods to stockpile
-        world.stockpile_at_settlement(agent_id, london).add(grain, 100.0);
+        assert_eq!(world.pops.len(), 2);
+
+        // Check settlement has both pops
+        let settlement = world.get_settlement(london).unwrap();
+        assert_eq!(settlement.pop_ids.len(), 2);
+
+        // Check pops have correct home settlement
+        assert_eq!(world.get_pop(pop1).unwrap().home_settlement, london);
+        assert_eq!(world.get_pop(pop2).unwrap().home_settlement, london);
+
+        // Check pops_at_settlement
+        let pops = world.pops_at_settlement(london);
+        assert_eq!(pops.len(), 2);
+    }
+
+    #[test]
+    fn test_merchants() {
+        let mut world = World::new();
+
+        let m1 = world.add_merchant();
+        let m2 = world.add_merchant();
+
+        assert_eq!(world.merchants.len(), 2);
+        assert!(world.get_merchant(m1).is_some());
+        assert!(world.get_merchant(m2).is_some());
+    }
+
+    #[test]
+    fn test_pop_stocks() {
+        let mut world = World::new();
+        let london = world.add_settlement("London", (0.0, 0.0));
+        let pop_id = world.add_pop(london).unwrap();
+
+        let grain: GoodId = 1;
+
+        // Add stocks to pop
+        let pop = world.get_pop_mut(pop_id).unwrap();
+        pop.stocks.insert(grain, 100.0);
 
         // Retrieve
-        let key = (agent_id, LocationId::settlement(london));
-        let stockpile = world.get_stockpile(key).unwrap();
-        assert_eq!(stockpile.get(grain), 100.0);
+        let pop = world.get_pop(pop_id).unwrap();
+        assert_eq!(*pop.stocks.get(&grain).unwrap(), 100.0);
     }
 }

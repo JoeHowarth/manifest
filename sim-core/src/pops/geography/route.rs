@@ -7,9 +7,9 @@ use crate::pops::types::SettlementId;
 pub struct Route {
     pub from: SettlementId,
     pub to: SettlementId,
-    pub distance: u32,     // Travel time in ticks
+    pub distance: u32,       // Travel time in ticks
     pub transport_cost: f64, // Cost per unit of cargo
-    pub risk: f64,         // 0.0 - 1.0, chance of incident per trip
+    pub risk: f64,           // 0.0 - 1.0, chance of incident per trip
 }
 
 impl Route {

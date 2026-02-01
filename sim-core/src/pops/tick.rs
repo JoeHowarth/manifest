@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use crate::pops::agents::{MerchantAgent, PopulationState};
+use crate::pops::agents::{MerchantAgent, Pop};
 use crate::pops::consumption;
 use crate::pops::market::{self, Order, Side};
 use crate::pops::needs::Need;
-use crate::pops::types::{AgentId, GoodId, GoodProfile, Price};
+use crate::pops::types::{AgentId, GoodId, GoodProfile, Price, SettlementId};
 
 // === CONSTANTS ===
 
@@ -38,7 +38,7 @@ fn qty_sell(norm_p: f64, norm_c: f64) -> f64 {
 /// Generate demand curve orders for a population.
 /// Sweeps across price points and generates orders at each level.
 fn generate_demand_curve_orders(
-    pop: &PopulationState,
+    pop: &Pop,
     good_profiles: &[GoodProfile],
     price_ema: &HashMap<GoodId, Price>,
 ) -> Vec<Order> {
@@ -74,7 +74,7 @@ fn generate_demand_curve_orders(
                 if qty > 0.001 {
                     orders.push(Order {
                         id: 0, // assigned later
-                        agent_id: pop.id,
+                        agent_id: pop.id.0,
                         good,
                         side: Side::Buy,
                         quantity: qty,
@@ -97,7 +97,7 @@ fn generate_demand_curve_orders(
                 if qty > 0.001 {
                     orders.push(Order {
                         id: 0, // assigned later
-                        agent_id: pop.id,
+                        agent_id: pop.id.0,
                         good,
                         side: Side::Sell,
                         quantity: qty,
@@ -141,9 +141,13 @@ Update Price and Income EMA
 
 */
 
-pub fn run_market_tick(
-    populations: &mut [PopulationState],
-    merchants: &mut [MerchantAgent],
+/// Run a market tick for a single settlement.
+/// Pops at this settlement participate in consumption and trading.
+/// Merchants with presence at this settlement participate in trading.
+pub fn run_settlement_tick(
+    settlement: SettlementId,
+    pops: &mut [&mut Pop],
+    merchants: &mut [&mut MerchantAgent],
     good_profiles: &[GoodProfile],
     needs: &HashMap<String, Need>,
     price_ema: &mut HashMap<GoodId, Price>,
@@ -151,7 +155,7 @@ pub fn run_market_tick(
     // 0. Production
 
     // 1. CONSUMPTION PHASE
-    for pop in populations.iter_mut() {
+    for pop in pops.iter_mut() {
         let result = consumption::compute_consumption(
             &pop.stocks,
             good_profiles,
@@ -178,7 +182,7 @@ pub fn run_market_tick(
     let mut all_orders = Vec::new();
     let mut next_order_id = 0u64;
 
-    for pop in populations.iter() {
+    for pop in pops.iter() {
         let mut orders = generate_demand_curve_orders(pop, good_profiles, price_ema);
         for o in &mut orders {
             o.id = next_order_id;
@@ -199,10 +203,10 @@ pub fn run_market_tick(
     // 3. GATHER BUDGETS
     // Pops spend up to income_ema per tick (but not more than they have)
     // Extra coins accumulate as savings
-    let budgets: HashMap<AgentId, f64> = populations
+    let budgets: HashMap<AgentId, f64> = pops
         .iter()
-        .map(|p| (p.id, p.income_ema.min(p.currency)))
-        .chain(merchants.iter().map(|m| (m.id, m.currency)))
+        .map(|p| (p.id.0, p.income_ema.min(p.currency)))
+        .chain(merchants.iter().map(|m| (m.id.0, m.currency)))
         .collect();
 
     // 4. MARKET CLEARING
@@ -217,10 +221,10 @@ pub fn run_market_tick(
 
     // 5. APPLY FILLS
     for fill in &result.fills {
-        if let Some(pop) = populations.iter_mut().find(|p| p.id == fill.agent_id) {
+        if let Some(pop) = pops.iter_mut().find(|p| p.id.0 == fill.agent_id) {
             market::apply_fill(pop, fill);
-        } else if let Some(merchant) = merchants.iter_mut().find(|m| m.id == fill.agent_id) {
-            market::apply_fill_merchant(merchant, fill);
+        } else if let Some(merchant) = merchants.iter_mut().find(|m| m.id.0 == fill.agent_id) {
+            market::apply_fill_merchant(merchant, settlement, fill);
         }
     }
 
@@ -231,4 +235,33 @@ pub fn run_market_tick(
     }
 
     result
+}
+
+// === LEGACY API ===
+
+/// Legacy API for running a market tick without settlement context.
+/// Merchants will use a dummy settlement for stockpile access.
+#[deprecated(note = "Use run_settlement_tick instead for proper per-settlement markets")]
+pub fn run_market_tick(
+    populations: &mut [Pop],
+    merchants: &mut [MerchantAgent],
+    good_profiles: &[GoodProfile],
+    needs: &HashMap<String, Need>,
+    price_ema: &mut HashMap<GoodId, Price>,
+) -> market::MultiMarketResult {
+    // Create a dummy settlement for legacy compatibility
+    let dummy_settlement = SettlementId::new(0);
+
+    // Convert to the format expected by run_settlement_tick
+    let mut pop_refs: Vec<&mut Pop> = populations.iter_mut().collect();
+    let mut merchant_refs: Vec<&mut MerchantAgent> = merchants.iter_mut().collect();
+
+    run_settlement_tick(
+        dummy_settlement,
+        &mut pop_refs,
+        &mut merchant_refs,
+        good_profiles,
+        needs,
+        price_ema,
+    )
 }

@@ -1,4 +1,4 @@
-use super::ids::{GoodId, Price, Quantity};
+use super::ids::GoodId;
 
 // === GOOD PROFILES ===
 

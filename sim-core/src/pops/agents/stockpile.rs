@@ -1,13 +1,10 @@
-// Stockpile type for location-based inventory
+// Stockpile type for inventory management
 
 use std::collections::HashMap;
 
-use crate::pops::types::{AgentId, GoodId, LocationId, Quantity};
+use crate::pops::types::{GoodId, Quantity};
 
-/// Key for stockpile lookup: (agent, location)
-pub type StockpileKey = (AgentId, LocationId);
-
-/// Inventory of goods at a specific location owned by an agent
+/// Inventory of goods
 #[derive(Debug, Clone, Default)]
 pub struct Stockpile {
     pub goods: HashMap<GoodId, Quantity>,

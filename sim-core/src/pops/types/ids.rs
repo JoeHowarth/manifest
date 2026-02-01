@@ -17,3 +17,21 @@ impl SettlementId {
         Self(id)
     }
 }
+
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
+pub struct PopId(pub u32);
+
+impl PopId {
+    pub fn new(id: u32) -> Self {
+        Self(id)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
+pub struct MerchantId(pub u32);
+
+impl MerchantId {
+    pub fn new(id: u32) -> Self {
+        Self(id)
+    }
+}
