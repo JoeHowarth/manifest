@@ -523,7 +523,10 @@ pub fn generate_facility_labor_bids(
 
     // Check input availability from org's stockpile
     let stockpile = state.get_stockpile(org_id, LocationId::from_settlement(settlement_id));
-    let gross_output = recipe.total_output(facility.optimal_workforce as f32, facility.optimal_workforce);
+    let gross_output = recipe.total_output(
+        facility.optimal_workforce as f32,
+        facility.optimal_workforce,
+    );
     let input_eff = if recipe.inputs.is_empty() {
         1.0 // Extraction facilities have no inputs
     } else {
@@ -551,7 +554,10 @@ pub fn generate_facility_labor_bids(
         .sum();
 
     let effective_workers = facility.optimal_workforce as f32 * input_eff;
-    let marginal = recipe.marginal_output(facility.current_workforce as f32, facility.optimal_workforce);
+    let marginal = recipe.marginal_output(
+        facility.current_workforce as f32,
+        facility.optimal_workforce,
+    );
     let mvp = marginal * (output_price - input_cost);
 
     // Only bid if profitable above subsistence
@@ -624,7 +630,10 @@ pub fn generate_org_input_bids(
 
         for (input_good, ratio) in &recipe.inputs {
             let current = stockpile.map(|s| s.get(*input_good)).unwrap_or(0.0);
-            let full_output = recipe.total_output(facility.optimal_workforce as f32, facility.optimal_workforce);
+            let full_output = recipe.total_output(
+                facility.optimal_workforce as f32,
+                facility.optimal_workforce,
+            );
             let target = full_output * ratio * INPUT_TARGET_TICKS;
             let shortfall = target - current;
 
@@ -708,7 +717,10 @@ pub fn generate_org_output_asks(
         let output_good = recipe.output;
 
         let current = stockpile.map(|s| s.get(output_good)).unwrap_or(0.0);
-        let full_output = recipe.total_output(facility.optimal_workforce as f32, facility.optimal_workforce);
+        let full_output = recipe.total_output(
+            facility.optimal_workforce as f32,
+            facility.optimal_workforce,
+        );
         let target = full_output * OUTPUT_TARGET_TICKS;
         let surplus = current - target;
 

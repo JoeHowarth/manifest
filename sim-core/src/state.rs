@@ -19,7 +19,7 @@ pub struct Recipe {
     pub inputs: Vec<(Good, f32)>, // (good, amount per unit output)
     pub output: Good,
     pub output_per_worker: f32, // Units produced per worker per tick (at/below optimal)
-    pub taper: f32,             // Diminishing returns rate beyond optimal (2.0 = steep, 0.5 = gentle)
+    pub taper: f32, // Diminishing returns rate beyond optimal (2.0 = steep, 0.5 = gentle)
 }
 
 impl Recipe {
@@ -38,7 +38,8 @@ impl Recipe {
             let excess = workers - optimal;
             // Integral of output_per_worker * e^(-taper * x / optimal) from 0 to excess
             let scale = optimal / self.taper.max(0.01);
-            let bonus = self.output_per_worker * scale * (1.0 - (-self.taper * excess / optimal).exp());
+            let bonus =
+                self.output_per_worker * scale * (1.0 - (-self.taper * excess / optimal).exp());
             base + bonus
         }
     }
