@@ -90,10 +90,12 @@ pub use types::{
 pub use agents::{ConsumptionResult, MerchantAgent, Pop, Stockpile};
 
 // Geography
-pub use geography::{NaturalResource, Route, Settlement};
+pub use geography::{ResourceQuality, ResourceSlot, ResourceType, Route, Settlement};
 
 // Production
-pub use production::{Facility, FacilityType};
+pub use production::{
+    Facility, FacilityDef, FacilityType, Recipe, RecipeId, get_facility_def, get_facility_defs,
+};
 
 // World
 pub use world::World;

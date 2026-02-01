@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use sim_core::{
-    World,
+    Recipe, World,
     needs::{Need, UtilityCurve},
     types::{GoodId, GoodProfile, NeedContribution},
 };
@@ -162,7 +162,7 @@ fn money_conservation_single_settlement() {
 
     // Run multiple ticks
     for tick in 0..20 {
-        world.run_tick(&good_profiles, &needs);
+        world.run_tick(&good_profiles, &needs, &Vec::<Recipe>::new());
 
         let current_currency = total_currency(&world);
         let diff = (current_currency - initial_currency).abs();
@@ -187,7 +187,7 @@ fn money_conservation_multiple_settlements() {
     let initial_currency = total_currency(&world);
 
     for tick in 0..20 {
-        world.run_tick(&good_profiles, &needs);
+        world.run_tick(&good_profiles, &needs, &Vec::<Recipe>::new());
 
         let current_currency = total_currency(&world);
         let diff = (current_currency - initial_currency).abs();
@@ -210,7 +210,7 @@ fn no_negative_stocks() {
     let needs = create_needs();
 
     for tick in 0..50 {
-        world.run_tick(&good_profiles, &needs);
+        world.run_tick(&good_profiles, &needs, &Vec::<Recipe>::new());
 
         if let Some((agent, good, qty)) = has_negative_stock(&world) {
             panic!(
@@ -228,7 +228,7 @@ fn no_negative_currency() {
     let needs = create_needs();
 
     for tick in 0..50 {
-        world.run_tick(&good_profiles, &needs);
+        world.run_tick(&good_profiles, &needs, &Vec::<Recipe>::new());
 
         if let Some((agent, currency)) = has_negative_currency(&world) {
             panic!(
@@ -249,7 +249,7 @@ fn entities_persist_across_ticks() {
     let initial_settlement_count = world.settlements.len();
 
     for tick in 0..20 {
-        world.run_tick(&good_profiles, &needs);
+        world.run_tick(&good_profiles, &needs, &Vec::<Recipe>::new());
 
         assert_eq!(
             world.pops.len(),
@@ -281,7 +281,7 @@ fn price_ema_stays_bounded() {
     let max_price = 10000.0;
 
     for tick in 0..50 {
-        world.run_tick(&good_profiles, &needs);
+        world.run_tick(&good_profiles, &needs, &Vec::<Recipe>::new());
 
         for ((settlement, good), price) in &world.price_ema {
             assert!(
@@ -323,7 +323,7 @@ fn tick_counter_increments() {
     assert_eq!(world.tick, 0);
 
     for expected_tick in 1..=10 {
-        world.run_tick(&good_profiles, &needs);
+        world.run_tick(&good_profiles, &needs, &Vec::<Recipe>::new());
         assert_eq!(
             world.tick, expected_tick,
             "Tick counter mismatch: expected {}, got {}",
@@ -343,7 +343,7 @@ fn consumption_reduces_stocks() {
 
     // Run enough ticks for consumption to happen
     for _ in 0..10 {
-        world.run_tick(&good_profiles, &needs);
+        world.run_tick(&good_profiles, &needs, &Vec::<Recipe>::new());
     }
 
     let final_grain = total_stock(&world, GRAIN);
@@ -406,7 +406,7 @@ fn isolated_settlements_dont_affect_each_other() {
 
     // Run ticks
     for _ in 0..10 {
-        world.run_tick(&good_profiles, &needs);
+        world.run_tick(&good_profiles, &needs, &Vec::<Recipe>::new());
     }
 
     // London's currency + grain value should be independent of Paris
@@ -438,7 +438,7 @@ fn prices_tend_toward_stability() {
     let mut price_history: Vec<f64> = Vec::new();
 
     for _ in 0..100 {
-        world.run_tick(&good_profiles, &needs);
+        world.run_tick(&good_profiles, &needs, &Vec::<Recipe>::new());
 
         if let Some(&price) = world.price_ema.get(&(settlement_id, GRAIN)) {
             price_history.push(price);

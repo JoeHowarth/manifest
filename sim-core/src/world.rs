@@ -2,9 +2,9 @@
 
 use std::collections::HashMap;
 
-use crate::agents::{MerchantAgent, Pop};
+use crate::agents::{MerchantAgent, Pop, Stockpile};
 use crate::geography::{Route, Settlement};
-use crate::production::{Facility, FacilityType};
+use crate::production::{Facility, FacilityType, Recipe, allocate_recipes, execute_production};
 use crate::types::{FacilityId, GoodId, MerchantId, PopId, Price, SettlementId};
 
 /// Complete state of the economic simulation
@@ -262,23 +262,87 @@ impl World {
         *ema = 0.7 * *ema + 0.3 * price;
     }
 
+    // === Production ===
+
+    /// Run production for all facilities.
+    ///
+    /// For each facility:
+    /// 1. Get the merchant's stockpile at the facility's settlement
+    /// 2. Allocate recipes based on priority, workers, inputs, capacity
+    /// 3. Execute production (consume inputs, produce outputs)
+    /// 4. Apply quality multiplier from resource slot
+    fn run_production_phase(&mut self, recipes: &[Recipe]) {
+        let facility_ids: Vec<FacilityId> = self.facilities.keys().copied().collect();
+
+        for facility_id in facility_ids {
+            // Get facility info (immutable borrow)
+            let (settlement_id, merchant_id, quality_multiplier) = {
+                let facility = match self.facilities.get(&facility_id) {
+                    Some(f) => f,
+                    None => continue,
+                };
+
+                // Get quality multiplier from resource slot
+                let quality = self
+                    .settlements
+                    .get(&facility.settlement)
+                    .and_then(|s| s.get_facility_slot(facility_id))
+                    .map(|slot| slot.quality.multiplier())
+                    .unwrap_or(1.0);
+
+                (facility.settlement, facility.owner, quality)
+            };
+
+            // Get or create stockpile for this merchant at this settlement
+            let merchant = match self.merchants.get_mut(&merchant_id) {
+                Some(m) => m,
+                None => continue,
+            };
+
+            // Ensure merchant has a stockpile at this settlement
+            let stockpile = merchant
+                .stockpiles
+                .entry(settlement_id)
+                .or_insert_with(Stockpile::new);
+
+            // Allocate recipes (need immutable facility ref)
+            let facility = self.facilities.get(&facility_id).unwrap();
+            let allocation = allocate_recipes(facility, recipes, stockpile);
+
+            // Execute production (mutates stockpile)
+            let stockpile = self
+                .merchants
+                .get_mut(&merchant_id)
+                .unwrap()
+                .stockpiles
+                .get_mut(&settlement_id)
+                .unwrap();
+
+            let _result = execute_production(&allocation, recipes, stockpile, quality_multiplier);
+        }
+    }
+
     // === Simulation Tick ===
 
     /// Run one simulation tick across all settlements.
     ///
-    /// For each settlement:
-    /// 1. Gather local pops
-    /// 2. Gather merchants with presence (facility ownership)
-    /// 3. Run consumption and market clearing
-    /// 4. Update price EMAs
+    /// Tick phases:
+    /// 0. Production - facilities produce goods using workers and inputs
+    /// 1. Consumption - pops consume goods to satisfy needs
+    /// 2. Market clearing - call auction for each settlement
+    /// 3. Price EMA update
     pub fn run_tick(
         &mut self,
         good_profiles: &[crate::types::GoodProfile],
         needs: &std::collections::HashMap<String, crate::needs::Need>,
+        recipes: &[Recipe],
     ) {
         use crate::tick::run_settlement_tick;
 
         self.tick += 1;
+
+        // === 0. PRODUCTION PHASE ===
+        self.run_production_phase(recipes);
 
         // Process each settlement
         let settlement_ids: Vec<SettlementId> = self.settlements.keys().copied().collect();
@@ -508,16 +572,17 @@ mod tests {
             pop.stocks.insert(grain, 10.0);
         }
 
-        // Set up good profiles and needs
+        // Set up good profiles, needs, and recipes
         let good_profiles = vec![GoodProfile {
             good: grain,
             contributions: vec![],
         }];
         let needs: std::collections::HashMap<String, Need> = std::collections::HashMap::new();
+        let recipes: Vec<crate::production::Recipe> = vec![];
 
         // Run a tick
         assert_eq!(world.tick, 0);
-        world.run_tick(&good_profiles, &needs);
+        world.run_tick(&good_profiles, &needs, &recipes);
         assert_eq!(world.tick, 1);
 
         // Pops should still exist with their data
