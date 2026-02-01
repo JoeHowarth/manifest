@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::pops::types::Price;
+use crate::types::Price;
 
 // === SKILL TYPES ===
 

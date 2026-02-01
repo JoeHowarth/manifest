@@ -1,9 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::pops::agents::Stockpile;
-use crate::pops::labor::FacilityId;
-use crate::pops::market::Order;
-use crate::pops::types::{GoodId, MerchantId, Price, SettlementId};
+use crate::agents::Stockpile;
+use crate::market::Order;
+use crate::types::{FacilityId, GoodId, MerchantId, Price, SettlementId};
 
 /// A merchant entity that can trade across settlements.
 /// Has agency - controlled by player or AI bot.

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use crate::pops::agents::{MerchantAgent, Pop};
-use crate::pops::types::{AgentId, GoodId, Price, SettlementId};
+use crate::agents::{MerchantAgent, Pop};
+use crate::types::{AgentId, GoodId, Price, SettlementId};
 
 use super::orders::{Fill, Order, Side};
 

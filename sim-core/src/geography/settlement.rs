@@ -1,6 +1,6 @@
 // Settlement type for multi-location economy
 
-use crate::pops::types::{PopId, SettlementId};
+use crate::types::{PopId, SettlementId};
 
 /// A node in the trade network
 #[derive(Debug, Clone)]

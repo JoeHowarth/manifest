@@ -1,21 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::pops::market::{PriceBias, clear_single_market};
-use crate::pops::types::Price;
+use crate::market::{PriceBias, clear_single_market};
+use crate::production::Facility;
+use crate::types::{FacilityId, Price};
 
 use super::production_fn::ProductionFn;
 use super::skills::{SkillDef, SkillId, Worker, WorkerId};
-
-// === FACILITY (labor-specific) ===
-
-#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
-pub struct FacilityId(pub u32);
-
-pub struct Facility {
-    pub id: FacilityId,
-    pub currency: f64,
-    pub workers: HashMap<SkillId, u32>, // current employees by primary skill
-}
 
 // === LABOR ORDERS ===
 
@@ -210,12 +200,8 @@ pub struct LaborMarketResult {
 }
 
 /// Convert labor bids/asks to generic Orders for the auction
-fn to_orders(
-    bids: &[LaborBid],
-    asks: &[LaborAsk],
-    skill: SkillId,
-) -> Vec<crate::pops::market::Order> {
-    use crate::pops::market::{Order, Side};
+fn to_orders(bids: &[LaborBid], asks: &[LaborAsk], skill: SkillId) -> Vec<crate::market::Order> {
+    use crate::market::{Order, Side};
 
     let mut orders = Vec::new();
 
@@ -252,7 +238,7 @@ pub fn clear_labor_markets(
     wage_emas: &HashMap<SkillId, Price>,
     facility_budgets: &HashMap<FacilityId, f64>,
 ) -> LaborMarketResult {
-    use crate::pops::market::Side;
+    use crate::market::Side;
 
     // 1. Order skills by wage EMA descending (specialists first)
     let mut skill_order: Vec<_> = skills.iter().map(|s| s.id).collect();

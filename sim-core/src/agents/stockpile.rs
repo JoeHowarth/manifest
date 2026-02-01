@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::pops::types::{GoodId, Quantity};
+use crate::types::{GoodId, Quantity};
 
 /// Inventory of goods
 #[derive(Debug, Clone, Default)]

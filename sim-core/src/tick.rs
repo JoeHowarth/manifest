@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use crate::pops::agents::{MerchantAgent, Pop};
-use crate::pops::consumption;
-use crate::pops::market::{self, Order, Side};
-use crate::pops::needs::Need;
-use crate::pops::types::{AgentId, GoodId, GoodProfile, Price, SettlementId};
+use crate::agents::{MerchantAgent, Pop};
+use crate::consumption;
+use crate::market::{self, Order, Side};
+use crate::needs::Need;
+use crate::types::{AgentId, GoodId, GoodProfile, Price, SettlementId};
 
 // === CONSTANTS ===
 

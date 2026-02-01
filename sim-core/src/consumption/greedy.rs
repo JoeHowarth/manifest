@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use crate::pops::agents::ConsumptionResult;
-use crate::pops::needs::Need;
-use crate::pops::types::{GoodId, GoodProfile, Price, Quantity};
+use crate::agents::ConsumptionResult;
+use crate::needs::Need;
+use crate::types::{GoodId, GoodProfile, Price, Quantity};
 
 // === CONSTANTS ===
 

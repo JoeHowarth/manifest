@@ -35,3 +35,12 @@ impl MerchantId {
         Self(id)
     }
 }
+
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
+pub struct FacilityId(pub u32);
+
+impl FacilityId {
+    pub fn new(id: u32) -> Self {
+        Self(id)
+    }
+}

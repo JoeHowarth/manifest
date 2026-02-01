@@ -1,4 +1,4 @@
-use crate::pops::types::{AgentId, GoodId, Price, Quantity};
+use crate::types::{AgentId, GoodId, Price, Quantity};
 
 // === ORDERS & FILLS ===
 

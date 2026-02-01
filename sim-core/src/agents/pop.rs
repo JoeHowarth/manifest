@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::pops::types::{GoodId, PopId, Quantity, SettlementId};
+use crate::types::{GoodId, PopId, Quantity, SettlementId};
 
 // === CONSUMPTION ===
 

@@ -1,6 +1,6 @@
 // Route type connecting settlements
 
-use crate::pops::types::SettlementId;
+use crate::types::SettlementId;
 
 /// An edge connecting two settlements
 #[derive(Debug, Clone)]
