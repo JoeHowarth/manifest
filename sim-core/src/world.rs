@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use crate::agents::{MerchantAgent, Pop, Stockpile};
 use crate::geography::{Route, Settlement};
+use crate::labor::SkillId;
 use crate::production::{Facility, FacilityType, Recipe, allocate_recipes, execute_production};
 use crate::types::{FacilityId, GoodId, MerchantId, PopId, Price, SettlementId};
 
@@ -25,6 +26,9 @@ pub struct World {
 
     // Market state per settlement
     pub price_ema: HashMap<(SettlementId, GoodId), Price>,
+
+    // Labor market state
+    pub wage_ema: HashMap<SkillId, Price>,
 
     // ID counters
     next_settlement_id: u32,
@@ -49,6 +53,7 @@ impl World {
             merchants: HashMap::new(),
             facilities: HashMap::new(),
             price_ema: HashMap::new(),
+            wage_ema: HashMap::new(),
             next_settlement_id: 0,
             next_pop_id: 0,
             next_merchant_id: 0,
@@ -262,6 +267,96 @@ impl World {
         *ema = 0.7 * *ema + 0.3 * price;
     }
 
+    // === Labor ===
+
+    /// Pay wages to employed pops.
+    ///
+    /// # Current Implementation (Simplified)
+    ///
+    /// For v1, we use a simplified wage payment model:
+    /// - Each employed pop receives wages directly from the merchant who owns their facility
+    /// - Wage amount is based on the wage_ema for the pop's primary skill
+    /// - No labor market clearing - assignments are static
+    ///
+    /// # Full Facility Treasury Design (Future)
+    ///
+    /// The complete design separates facility and merchant finances:
+    ///
+    /// ```text
+    /// Merchant funds facility treasury
+    ///          ↓
+    /// Facility.currency (treasury)
+    ///          ↓
+    /// Facility pays wages → Pop.currency
+    ///          ↓
+    /// Production outputs → Merchant stockpile
+    ///          ↓
+    /// Merchant sells goods → Merchant.currency
+    ///          ↓
+    /// (cycle repeats)
+    /// ```
+    ///
+    /// Treasury rules:
+    /// - Facility maintains 1-2 ticks of wages as buffer
+    /// - Revenue from production goes to facility treasury
+    /// - Excess above threshold flows to merchant
+    /// - If treasury insufficient, merchant must inject funds or facility pauses
+    ///
+    /// This creates interesting cash flow management decisions:
+    /// - Merchant must allocate capital across facilities
+    /// - Facilities can fail due to liquidity crises
+    /// - Player/AI decides when to fund vs abandon struggling facilities
+    fn run_labor_phase(&mut self) {
+        // Collect employed pops and their facilities
+        let employed_pops: Vec<(PopId, FacilityId)> = self
+            .pops
+            .values()
+            .filter_map(|pop| pop.employed_at.map(|fid| (pop.id, fid)))
+            .collect();
+
+        for (pop_id, facility_id) in employed_pops {
+            // Get facility owner
+            let merchant_id = match self.facilities.get(&facility_id) {
+                Some(f) => f.owner,
+                None => continue,
+            };
+
+            // Determine wage (use primary skill's EMA, or default)
+            let pop = match self.pops.get(&pop_id) {
+                Some(p) => p,
+                None => continue,
+            };
+
+            let wage = pop
+                .skills
+                .iter()
+                .filter_map(|skill| self.wage_ema.get(skill))
+                .copied()
+                .fold(0.0f64, |a, b| a.max(b)) // Use highest-paying skill
+                .max(pop.min_wage); // At least min_wage
+
+            // SHORTCUT: Pay directly from merchant.currency
+            // Full design would use facility.currency as intermediate treasury
+            let merchant = match self.merchants.get_mut(&merchant_id) {
+                Some(m) => m,
+                None => continue,
+            };
+
+            if merchant.currency >= wage {
+                merchant.currency -= wage;
+
+                // Pay pop and update income EMA
+                let pop = self.pops.get_mut(&pop_id).unwrap();
+                pop.currency += wage;
+                pop.record_income(wage);
+            } else {
+                // Merchant can't afford wage - pop earns nothing this tick
+                let pop = self.pops.get_mut(&pop_id).unwrap();
+                pop.record_income(0.0);
+            }
+        }
+    }
+
     // === Production ===
 
     /// Run production for all facilities.
@@ -327,10 +422,11 @@ impl World {
     /// Run one simulation tick across all settlements.
     ///
     /// Tick phases:
-    /// 0. Production - facilities produce goods using workers and inputs
-    /// 1. Consumption - pops consume goods to satisfy needs
-    /// 2. Market clearing - call auction for each settlement
-    /// 3. Price EMA update
+    /// 0. Labor - pay wages to employed pops
+    /// 1. Production - facilities produce goods using workers and inputs
+    /// 2. Consumption - pops consume goods to satisfy needs
+    /// 3. Market clearing - call auction for each settlement
+    /// 4. Price EMA update
     pub fn run_tick(
         &mut self,
         good_profiles: &[crate::types::GoodProfile],
@@ -341,7 +437,10 @@ impl World {
 
         self.tick += 1;
 
-        // === 0. PRODUCTION PHASE ===
+        // === 0. LABOR PHASE ===
+        self.run_labor_phase();
+
+        // === 1. PRODUCTION PHASE ===
         self.run_production_phase(recipes);
 
         // Process each settlement

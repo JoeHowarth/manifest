@@ -1,11 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::agents::Pop;
 use crate::market::{PriceBias, clear_single_market};
 use crate::production::Facility;
 use crate::types::{FacilityId, Price};
 
 use super::production_fn::ProductionFn;
-use super::skills::{SkillDef, SkillId, Worker, WorkerId};
+use super::skills::{SkillDef, SkillId, Worker};
 
 // === LABOR ORDERS ===
 
@@ -17,10 +18,12 @@ pub struct LaborBid {
     pub max_wage: Price, // MVP for this marginal worker
 }
 
+/// Labor supply order from a worker.
+/// Uses u32 worker_id to support both Worker and Pop as labor sources.
 #[derive(Clone)]
 pub struct LaborAsk {
     pub id: u64,
-    pub worker_id: WorkerId,
+    pub worker_id: u32, // Generic ID - can be WorkerId.0 or PopId.0
     pub skill: SkillId,
     pub min_wage: Price,
 }
@@ -175,7 +178,7 @@ pub fn generate_worker_asks(worker: &Worker) -> Vec<LaborAsk> {
         .map(|&skill| {
             let ask = LaborAsk {
                 id: next_id,
-                worker_id: worker.id,
+                worker_id: worker.id.0,
                 skill,
                 min_wage: worker.min_wage,
             };
@@ -185,10 +188,30 @@ pub fn generate_worker_asks(worker: &Worker) -> Vec<LaborAsk> {
         .collect()
 }
 
+/// Generate labor asks for a pop across all their skills.
+/// Pops participate in labor market as a single worker unit.
+pub fn generate_pop_asks(pop: &Pop, next_id: &mut u64) -> Vec<LaborAsk> {
+    pop.skills
+        .iter()
+        .map(|&skill| {
+            let ask = LaborAsk {
+                id: *next_id,
+                worker_id: pop.id.0, // Use pop ID as worker ID
+                skill,
+                min_wage: pop.min_wage,
+            };
+            *next_id += 1;
+            ask
+        })
+        .collect()
+}
+
 // === MARKET CLEARING ===
 
+/// Assignment of a worker to a facility at a wage.
+/// worker_id is generic (u32) to support both Worker and Pop.
 pub struct Assignment {
-    pub worker_id: WorkerId,
+    pub worker_id: u32,
     pub facility_id: FacilityId,
     pub skill: SkillId,
     pub wage: Price,
@@ -219,7 +242,7 @@ fn to_orders(bids: &[LaborBid], asks: &[LaborAsk], skill: SkillId) -> Vec<crate:
     for ask in asks.iter().filter(|a| a.skill == skill) {
         orders.push(Order {
             id: ask.id,
-            agent_id: ask.worker_id.0,
+            agent_id: ask.worker_id,
             good: skill.0,
             side: Side::Sell,
             quantity: 1.0,
@@ -250,7 +273,7 @@ pub fn clear_labor_markets(
 
     let mut assignments = Vec::new();
     let mut clearing_wages = HashMap::new();
-    let mut filled_workers: HashSet<WorkerId> = HashSet::new();
+    let mut filled_workers: HashSet<u32> = HashSet::new();
     let mut remaining_budgets = facility_budgets.clone();
 
     // Track which bids have been used (one hire per bid)
@@ -401,6 +424,7 @@ pub fn apply_assignments(facilities: &mut [Facility], result: &LaborMarketResult
 
 #[cfg(test)]
 mod tests {
+    use super::super::skills::WorkerId;
     use super::*;
 
     // === TEST HELPERS ===
@@ -437,7 +461,7 @@ mod tests {
     fn ask(id: u64, worker: u32, skill: u32, min_wage: f64) -> LaborAsk {
         LaborAsk {
             id,
-            worker_id: WorkerId(worker),
+            worker_id: worker,
             skill: SkillId(skill),
             min_wage,
         }
