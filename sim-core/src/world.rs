@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::agents::{MerchantAgent, Pop, Stockpile};
 use crate::geography::{Route, Settlement};
-use crate::labor::SkillId;
+use crate::labor::{FacilityBidState, SkillId};
 use crate::production::{Facility, FacilityType, Recipe, allocate_recipes, execute_production};
 use crate::types::{FacilityId, GoodId, MerchantId, PopId, Price, SettlementId};
 
@@ -29,11 +29,12 @@ pub struct World {
 
     // Labor market state
     pub wage_ema: HashMap<SkillId, Price>,
+    /// Facility bid states for adaptive wage bidding
+    pub facility_bid_states: HashMap<FacilityId, FacilityBidState>,
 
     // ID counters
     next_settlement_id: u32,
-    next_pop_id: u32,
-    next_merchant_id: u32,
+    next_agent_id: u32, // shared counter for PopId and MerchantId to avoid collisions
     next_facility_id: u32,
 }
 
@@ -54,9 +55,9 @@ impl World {
             facilities: HashMap::new(),
             price_ema: HashMap::new(),
             wage_ema: HashMap::new(),
+            facility_bid_states: HashMap::new(),
             next_settlement_id: 0,
-            next_pop_id: 0,
-            next_merchant_id: 0,
+            next_agent_id: 0, // shared counter for PopId and MerchantId
             next_facility_id: 0,
         }
     }
@@ -121,8 +122,8 @@ impl World {
     pub fn add_pop(&mut self, settlement_id: SettlementId) -> Option<PopId> {
         let settlement = self.settlements.get_mut(&settlement_id)?;
 
-        let id = PopId::new(self.next_pop_id);
-        self.next_pop_id += 1;
+        let id = PopId::new(self.next_agent_id);
+        self.next_agent_id += 1;
 
         let pop = Pop::new(id, settlement_id);
         self.pops.insert(id, pop);
@@ -158,8 +159,8 @@ impl World {
 
     /// Add a merchant to the world, returns its ID
     pub fn add_merchant(&mut self) -> MerchantId {
-        let id = MerchantId::new(self.next_merchant_id);
-        self.next_merchant_id += 1;
+        let id = MerchantId::new(self.next_agent_id);
+        self.next_agent_id += 1;
 
         let merchant = MerchantAgent::new(id);
         self.merchants.insert(id, merchant);
@@ -307,53 +308,231 @@ impl World {
     /// - Facilities can fail due to liquidity crises
     /// - Player/AI decides when to fund vs abandon struggling facilities
     fn run_labor_phase(&mut self) {
-        // Collect employed pops and their facilities
-        let employed_pops: Vec<(PopId, FacilityId)> = self
-            .pops
-            .values()
-            .filter_map(|pop| pop.employed_at.map(|fid| (pop.id, fid)))
+        use crate::labor::{
+            LaborBid, SkillDef, clear_labor_markets, generate_pop_asks, update_wage_emas,
+        };
+
+        // Collect all skills in use
+        let skills: Vec<SkillDef> = self
+            .wage_ema
+            .keys()
+            .map(|&id| SkillDef {
+                id,
+                name: String::new(),
+                parent: None,
+            })
             .collect();
 
-        for (pop_id, facility_id) in employed_pops {
-            // Get facility owner
-            let merchant_id = match self.facilities.get(&facility_id) {
-                Some(f) => f.owner,
-                None => continue,
-            };
+        if skills.is_empty() {
+            return;
+        }
 
-            // Determine wage (use primary skill's EMA, or default)
-            let pop = match self.pops.get(&pop_id) {
-                Some(p) => p,
-                None => continue,
-            };
+        // === PHASE 1: Generate bids with adaptive pricing ===
+        // Track (facility_id, skill) -> (bids_generated, mvp) for outcome computation
+        let mut facility_skill_bids: HashMap<(FacilityId, SkillId), (u32, Price)> = HashMap::new();
+        let mut bids: Vec<LaborBid> = Vec::new();
+        let mut next_bid_id = 0u64;
 
-            let wage = pop
-                .skills
+        for facility in self.facilities.values() {
+            // Get output price for this facility's settlement (simplified MVP)
+            let output_price = self
+                .price_ema
                 .iter()
-                .filter_map(|skill| self.wage_ema.get(skill))
-                .copied()
-                .fold(0.0f64, |a, b| a.max(b)) // Use highest-paying skill
-                .max(pop.min_wage); // At least min_wage
+                .find(|((sid, _), _)| *sid == facility.settlement)
+                .map(|(_, &p)| p)
+                .unwrap_or(1.0);
 
-            // SHORTCUT: Pay directly from merchant.currency
-            // Full design would use facility.currency as intermediate treasury
-            let merchant = match self.merchants.get_mut(&merchant_id) {
-                Some(m) => m,
-                None => continue,
+            // Get merchant's budget
+            let merchant_budget = self
+                .merchants
+                .get(&facility.owner)
+                .map(|m| m.currency)
+                .unwrap_or(0.0);
+
+            if merchant_budget <= 0.0 {
+                continue;
+            }
+
+            // Get or create bid state for this facility
+            let bid_state = self.facility_bid_states.entry(facility.id).or_default();
+
+            let max_workers = facility.capacity.min(50);
+
+            for skill in &skills {
+                // MVP = output_price for all slots (simplified, no diminishing returns)
+                let mvp = output_price;
+
+                // Get adaptive bid from state
+                let wage_ema = self.wage_ema.get(&skill.id).copied().unwrap_or(1.0);
+                let adaptive_bid = bid_state.get_bid(skill.id, wage_ema);
+
+                // Actual bid = min(adaptive_bid, mvp)
+                let actual_bid = adaptive_bid.min(mvp);
+
+                // Track how many bids we're generating
+                facility_skill_bids.insert((facility.id, skill.id), (max_workers, mvp));
+
+                for _ in 0..max_workers {
+                    if mvp > 0.0 {
+                        bids.push(LaborBid {
+                            id: next_bid_id,
+                            facility_id: facility.id,
+                            skill: skill.id,
+                            max_wage: actual_bid,
+                        });
+                        next_bid_id += 1;
+                    }
+                }
+            }
+        }
+
+        // === PHASE 2: Generate pop asks ===
+        let mut asks = Vec::new();
+        let mut next_ask_id = 0u64;
+        for pop in self.pops.values() {
+            let mut pop_asks = generate_pop_asks(pop, &mut next_ask_id);
+            asks.append(&mut pop_asks);
+        }
+
+        // === PHASE 3: Clear labor markets ===
+        let facility_budgets: HashMap<FacilityId, f64> = self
+            .facilities
+            .iter()
+            .map(|(fid, f)| {
+                let budget = self
+                    .merchants
+                    .get(&f.owner)
+                    .map(|m| m.currency)
+                    .unwrap_or(0.0);
+                (*fid, budget)
+            })
+            .collect();
+
+        let result = clear_labor_markets(&skills, &bids, &asks, &self.wage_ema, &facility_budgets);
+
+        // Debug: print labor market clearing results
+        #[cfg(debug_assertions)]
+        if !result.assignments.is_empty() || !bids.is_empty() || !asks.is_empty() {
+            eprintln!(
+                "[Labor] bids={}, asks={}, assignments={}",
+                bids.len(),
+                asks.len(),
+                result.assignments.len()
+            );
+            for a in &result.assignments {
+                eprintln!(
+                    "[Labor]   Assignment: worker={} -> facility={:?} skill={:?} wage={}",
+                    a.worker_id, a.facility_id, a.skill, a.wage
+                );
+            }
+        }
+
+        // Update wage EMAs
+        update_wage_emas(&mut self.wage_ema, &result);
+
+        // === PHASE 4: Count fills per (facility, skill) ===
+        let mut fills: HashMap<(FacilityId, SkillId), u32> = HashMap::new();
+        for assignment in &result.assignments {
+            *fills
+                .entry((assignment.facility_id, assignment.skill))
+                .or_insert(0) += 1;
+        }
+
+        // === PHASE 5: Record outcomes and adjust bids ===
+        // Compute global excess workers
+        let total_workers: u32 = asks.len() as u32;
+        let total_jobs: u32 = bids.len() as u32;
+        let global_excess_workers = total_workers > total_jobs;
+
+        for ((facility_id, skill_id), (wanted, mvp)) in &facility_skill_bids {
+            let filled = fills.get(&(*facility_id, *skill_id)).copied().unwrap_or(0);
+
+            // Get adaptive bid for this skill
+            let bid_state = self.facility_bid_states.get(facility_id);
+            let wage_ema = self.wage_ema.get(skill_id).copied().unwrap_or(1.0);
+            let adaptive_bid = bid_state
+                .map(|s| s.get_bid(*skill_id, wage_ema))
+                .unwrap_or(wage_ema);
+
+            // Compute profitable_unfilled: unfilled slots where MVP > adaptive_bid
+            let unfilled = wanted.saturating_sub(filled);
+            let profitable_unfilled = if *mvp > adaptive_bid { unfilled } else { 0 };
+
+            // Marginal profitable MVP (since all slots have same MVP, it's just mvp if profitable)
+            let marginal_profitable_mvp = if profitable_unfilled > 0 {
+                Some(*mvp)
+            } else {
+                None
             };
 
-            if merchant.currency >= wage {
-                merchant.currency -= wage;
+            // Record outcome
+            if let Some(bid_state) = self.facility_bid_states.get_mut(facility_id) {
+                bid_state.record_outcome(
+                    *skill_id,
+                    filled,
+                    profitable_unfilled,
+                    marginal_profitable_mvp,
+                );
+            }
+        }
 
-                // Pay pop and update income EMA
-                let pop = self.pops.get_mut(&pop_id).unwrap();
-                pop.currency += wage;
-                pop.record_income(wage);
-            } else {
-                // Merchant can't afford wage - pop earns nothing this tick
-                let pop = self.pops.get_mut(&pop_id).unwrap();
+        // Adjust bids for next tick
+        for (facility_id, bid_state) in self.facility_bid_states.iter_mut() {
+            for skill in &skills {
+                let wage_ema = self.wage_ema.get(&skill.id).copied().unwrap_or(1.0);
+                // Only adjust if this facility had bids for this skill
+                if facility_skill_bids.contains_key(&(*facility_id, skill.id)) {
+                    bid_state.adjust_bid(skill.id, wage_ema, global_excess_workers);
+                }
+            }
+        }
+
+        // === PHASE 6: Apply assignments ===
+        // Clear existing employment
+        for pop in self.pops.values_mut() {
+            pop.employed_at = None;
+        }
+        for facility in self.facilities.values_mut() {
+            facility.workers.clear();
+        }
+
+        // Apply new assignments and pay wages
+        for assignment in &result.assignments {
+            let pop_id = PopId::new(assignment.worker_id);
+
+            if let Some(pop) = self.pops.get_mut(&pop_id) {
+                pop.employed_at = Some(assignment.facility_id);
+
+                if let Some(facility) = self.facilities.get_mut(&assignment.facility_id) {
+                    *facility.workers.entry(assignment.skill).or_insert(0) += 1;
+
+                    if let Some(merchant) = self.merchants.get_mut(&facility.owner) {
+                        if merchant.currency >= assignment.wage {
+                            merchant.currency -= assignment.wage;
+                            pop.currency += assignment.wage;
+                            pop.record_income(assignment.wage);
+                        } else {
+                            pop.record_income(0.0);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Record zero income for unemployed pops
+        for pop in self.pops.values_mut() {
+            if pop.employed_at.is_none() {
                 pop.record_income(0.0);
             }
+        }
+
+        // Debug: print facility workers after assignment
+        #[cfg(debug_assertions)]
+        for facility in self.facilities.values() {
+            eprintln!(
+                "[Labor] Facility {:?} workers after assignment: {:?}",
+                facility.id, facility.workers
+            );
         }
     }
 
@@ -507,6 +686,96 @@ impl World {
             // Merge settlement prices back into world price_ema
             for (good, price) in settlement_prices {
                 self.price_ema.insert((settlement_id, good), price);
+            }
+        }
+
+        // === 5. MORTALITY PHASE ===
+        self.run_mortality_phase();
+    }
+
+    /// Run mortality checks for all pops based on their food satisfaction.
+    /// Pops may die (removed) or grow (spawn new pop).
+    fn run_mortality_phase(&mut self) {
+        use crate::mortality::{MortalityOutcome, check_mortality};
+
+        // Skip mortality if no pops have food satisfaction tracked (no food need defined)
+        let any_food_tracked = self
+            .pops
+            .values()
+            .any(|p| p.need_satisfaction.contains_key("food"));
+        if !any_food_tracked {
+            return;
+        }
+
+        let mut rng = rand::rng();
+
+        // Collect pop IDs and their outcomes
+        let outcomes: Vec<(PopId, SettlementId, MortalityOutcome)> = self
+            .pops
+            .iter()
+            .map(|(id, pop)| {
+                let food_satisfaction = pop.need_satisfaction.get("food").copied().unwrap_or(0.0);
+                let outcome = check_mortality(&mut rng, food_satisfaction);
+                (*id, pop.home_settlement, outcome)
+            })
+            .collect();
+
+        // Process outcomes
+        let mut new_pops: Vec<(SettlementId, Pop)> = Vec::new();
+        let mut dead_pop_ids: Vec<PopId> = Vec::new();
+
+        for (pop_id, settlement_id, outcome) in outcomes {
+            match outcome {
+                MortalityOutcome::Dies => {
+                    dead_pop_ids.push(pop_id);
+                }
+                MortalityOutcome::Grows => {
+                    // Clone the pop to create a new one
+                    if let Some(parent) = self.pops.get(&pop_id) {
+                        let mut child = parent.clone();
+                        // Reset child's stocks to modest starting amount
+                        child.stocks.clear();
+                        child.currency = parent.income_ema * 5.0; // Start with some savings
+                        new_pops.push((settlement_id, child));
+                    }
+                }
+                MortalityOutcome::Survives => {}
+            }
+        }
+
+        // Remove dead pops
+        for pop_id in &dead_pop_ids {
+            if let Some(pop) = self.pops.remove(pop_id) {
+                // Remove from settlement's pop list
+                if let Some(settlement) = self.settlements.get_mut(&pop.home_settlement) {
+                    settlement.pop_ids.retain(|id| id != pop_id);
+                }
+                // Remove from facility employment
+                for facility in self.facilities.values_mut() {
+                    // Note: Current design has pops as single workers, not tracked per-facility
+                    // If pop was employed, reduce worker count
+                    if pop.employed_at == Some(facility.id) {
+                        for skill in &pop.skills {
+                            if let Some(count) = facility.workers.get_mut(skill) {
+                                *count = count.saturating_sub(1);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Add new pops from growth
+        for (settlement_id, child) in new_pops {
+            if let Some(new_id) = self.add_pop(settlement_id)
+                && let Some(new_pop) = self.pops.get_mut(&new_id)
+            {
+                // Copy over relevant fields from child
+                new_pop.skills = child.skills;
+                new_pop.min_wage = child.min_wage;
+                new_pop.income_ema = child.income_ema;
+                new_pop.currency = child.currency;
+                new_pop.desired_consumption_ema = child.desired_consumption_ema;
             }
         }
     }

@@ -15,11 +15,8 @@ tsify-next = { version = "0.5", features = ["js"] }
 slotmap = { version = "1", features = ["serde"] }
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
+rand = "0.9.2"
 
 # For non-wasm testing
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
-
-[profile.release]
-opt-level = "s"
-lto = true

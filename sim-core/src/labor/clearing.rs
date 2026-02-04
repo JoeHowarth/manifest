@@ -10,12 +10,12 @@ use super::skills::{SkillDef, SkillId, Worker};
 
 // === LABOR ORDERS ===
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LaborBid {
     pub id: u64,
     pub facility_id: FacilityId,
     pub skill: SkillId,
-    pub max_wage: Price, // MVP for this marginal worker
+    pub max_wage: Price, // What we're actually bidding (may be < MVP)
 }
 
 /// Labor supply order from a worker.
@@ -114,15 +114,33 @@ fn compute_other_cost(
 
 // === BID GENERATION ===
 
-/// Generate labor bids for a facility based on MVP calculations
+/// Result of generating bids for a facility.
+/// Contains both the bids and their corresponding MVPs (for computing profitable_unfilled).
+#[derive(Debug, Clone)]
+pub struct FacilityBidsResult {
+    /// The labor bids (max_wage may be capped by adaptive_bid)
+    pub bids: Vec<LaborBid>,
+    /// MVP for each bid (in same order as bids), used to compute profitable_unfilled
+    pub mvps: Vec<Price>,
+}
+
+/// Generate labor bids for a facility based on MVP calculations.
+///
+/// - `adaptive_bid`: If provided, each slot's max_wage is capped at min(mvp, adaptive_bid).
+///   This implements the "bid low but up to MVP" strategy.
+///
+/// Returns both the bids and their MVPs, so the caller can compute which unfilled
+/// slots were "profitable" (MVP > adaptive_bid).
 pub fn generate_facility_bids(
     facility: &Facility,
     production_fn: &dyn ProductionFn,
     wage_emas: &HashMap<SkillId, Price>,
     output_price: Price,
     max_hires_per_skill: u32,
-) -> Vec<LaborBid> {
+    adaptive_bid: Option<Price>,
+) -> FacilityBidsResult {
     let mut bids = Vec::new();
+    let mut mvps = Vec::new();
     let mut next_id = 0u64;
 
     for skill in production_fn.relevant_skills() {
@@ -155,18 +173,22 @@ pub fn generate_facility_bids(
             let mvp = marginal_output * output_price;
 
             if mvp > 0.0 {
+                // Actual bid is min(adaptive_bid, mvp), or just mvp if no adaptive_bid
+                let actual_bid = adaptive_bid.map(|ab| ab.min(mvp)).unwrap_or(mvp);
+
                 bids.push(LaborBid {
                     id: next_id,
                     facility_id: facility.id,
                     skill,
-                    max_wage: mvp,
+                    max_wage: actual_bid,
                 });
+                mvps.push(mvp);
                 next_id += 1;
             }
         }
     }
 
-    bids
+    FacilityBidsResult { bids, mvps }
 }
 
 /// Generate labor asks for a worker across all their skills
@@ -312,8 +334,10 @@ pub fn clear_labor_markets(
                 skill,
             );
 
-            // Clear with employer (buyer) bias
-            let result = clear_single_market(skill.0, &orders, PriceBias::FavorBuyers);
+            // Clear with worker (seller) bias - wages set by employer's bid
+            // This means clearing wage = min(filled bids), so the marginal
+            // employer sets the wage. Facilities adjust bids based on fill rate.
+            let result = clear_single_market(skill.0, &orders, PriceBias::FavorSellers);
 
             let Some(wage) = result.clearing_price else {
                 break;
@@ -326,6 +350,17 @@ pub fn clear_labor_markets(
                 .filter(|f| matches!(f.side, Side::Buy))
                 .collect();
 
+            // Calculate cumulative cost per facility from all their fills
+            let mut facility_costs: HashMap<FacilityId, f64> = HashMap::new();
+            for buy_fill in &buy_fills {
+                let bid = skill_bids
+                    .iter()
+                    .find(|b| b.id == buy_fill.order_id)
+                    .unwrap();
+                *facility_costs.entry(bid.facility_id).or_insert(0.0) += wage;
+            }
+
+            // Find bids from facilities that exceed budget
             let mut infeasible_bids = Vec::new();
             for buy_fill in &buy_fills {
                 let bid = skill_bids
@@ -337,9 +372,14 @@ pub fn clear_labor_markets(
                     .get(&bid.facility_id)
                     .copied()
                     .unwrap_or(0.0);
+                let total_cost = *facility_costs.get(&bid.facility_id).unwrap();
 
-                if budget < wage {
+                // If total cost exceeds budget, mark the lowest-priority bid as infeasible
+                // (we process in order, so later bids get removed first)
+                if total_cost > budget {
                     infeasible_bids.push(bid.id);
+                    // Reduce tracked cost so we keep one bid if budget allows at least one
+                    *facility_costs.get_mut(&bid.facility_id).unwrap() -= wage;
                 }
             }
 
@@ -481,6 +521,30 @@ mod tests {
     // === TESTS ===
 
     #[test]
+    fn clearing_wage_at_employer_bid() {
+        // Facility: will pay up to 5
+        // Worker: will work for 0+
+        // With FavorSellers, clearing = employer's bid (5)
+        let skills = vec![skill_def(1, "Laborer", None)];
+
+        let bids = vec![bid(1, 1, 1, 5.0)];
+        let asks = vec![ask(1, 1, 1, 0.0)];
+
+        let wage_emas = emas(&[(1, 2.0)]);
+        let facility_budgets = budgets(&[(1, 100.0)]);
+
+        let result = clear_labor_markets(&skills, &bids, &asks, &wage_emas, &facility_budgets);
+
+        assert_eq!(result.assignments.len(), 1);
+        let wage = *result.clearing_wages.get(&skill(1)).unwrap();
+        assert_eq!(
+            wage, 5.0,
+            "clearing wage should be employer's bid (5), got {}",
+            wage
+        );
+    }
+
+    #[test]
     fn no_double_hire() {
         // Worker has both skills, two facilities each want one
         let skills = vec![
@@ -488,7 +552,7 @@ mod tests {
             skill_def(2, "Craftsman", Some(1)),
         ];
 
-        let _workers = vec![worker(1, &[1, 2], 0.0)];
+        let _workers = [worker(1, &[1, 2], 0.0)];
 
         // Facility A bids for craftsman, Facility B bids for laborer
         let bids = vec![
@@ -552,7 +616,11 @@ mod tests {
             .map(|a| a.wage)
             .sum();
 
-        assert!(total_paid <= 50.0);
+        assert!(
+            total_paid <= 50.0,
+            "total_paid {} exceeds budget 50",
+            total_paid
+        );
     }
 
     #[test]
@@ -612,12 +680,12 @@ mod tests {
     }
 
     #[test]
-    fn buyer_bias_picks_lower_price() {
+    fn seller_bias_picks_higher_price() {
         let skills = vec![skill_def(1, "Laborer", None)];
 
         // One bid at 100, one ask at 0
         // Valid clearing prices are anywhere in [0, 100]
-        // With FavorBuyers, should pick low end
+        // With FavorSellers, should pick high end (employer's bid)
         let bids = vec![bid(1, 1, 1, 100.0)];
         let asks = vec![ask(1, 1, 1, 0.0)];
 
@@ -628,9 +696,9 @@ mod tests {
 
         assert_eq!(result.assignments.len(), 1);
 
-        // With buyer bias, wage should be at the ask (0), not the bid (100)
+        // With seller bias, wage should be at the bid (100), not the ask (0)
         let wage = result.clearing_wages.get(&skill(1)).unwrap();
-        assert_eq!(*wage, 0.0, "expected wage=0 (ask), got {}", wage);
+        assert_eq!(*wage, 100.0, "expected wage=100 (bid), got {}", wage);
     }
 
     #[test]
@@ -696,12 +764,12 @@ mod tests {
     }
 
     #[test]
-    fn facility_can_hire_when_clearing_below_budget() {
+    fn facility_cant_hire_when_bid_exceeds_budget() {
         let skills = vec![skill_def(1, "Laborer", None)];
 
-        // Facility bids up to 50, but only has budget of 40
+        // Facility bids 50, but only has budget of 40
         // Worker asks 10
-        // Clearing price should be 10 (FavorBuyers), which facility CAN afford
+        // With FavorSellers, clearing = 50 (bid), which exceeds budget
         let bids = vec![bid(1, 1, 1, 50.0)];
         let asks = vec![ask(1, 1, 1, 10.0)];
 
@@ -710,16 +778,37 @@ mod tests {
 
         let result = clear_labor_markets(&skills, &bids, &asks, &wage_emas, &facility_budgets);
 
-        // Should hire at 10, which is within budget
-        assert_eq!(result.assignments.len(), 1);
-        assert_eq!(*result.clearing_wages.get(&skill(1)).unwrap(), 10.0);
+        // Should NOT hire because clearing price (50) exceeds budget (40)
+        assert_eq!(result.assignments.len(), 0);
     }
 
     #[test]
-    fn excess_workers_drives_wage_to_floor() {
+    fn facility_can_hire_when_bid_within_budget() {
+        let skills = vec![skill_def(1, "Laborer", None)];
+
+        // Facility bids 30, has budget of 40
+        // Worker asks 10
+        // With FavorSellers, clearing = 30 (bid), which is within budget
+        let bids = vec![bid(1, 1, 1, 30.0)];
+        let asks = vec![ask(1, 1, 1, 10.0)];
+
+        let wage_emas = emas(&[(1, 20.0)]);
+        let facility_budgets = budgets(&[(1, 40.0)]);
+
+        let result = clear_labor_markets(&skills, &bids, &asks, &wage_emas, &facility_budgets);
+
+        // Should hire at 30 (bid), which is within budget
+        assert_eq!(result.assignments.len(), 1);
+        assert_eq!(*result.clearing_wages.get(&skill(1)).unwrap(), 30.0);
+    }
+
+    #[test]
+    fn excess_workers_wage_at_employer_bid() {
         let skills = vec![skill_def(1, "Laborer", None)];
 
         // 1 job, 5 workers all willing to work for 0
+        // With FavorSellers, wage = employer's bid (50)
+        // The "floor" effect happens over time as employers lower bids
         let bids = vec![bid(1, 1, 1, 50.0)];
         let asks = vec![
             ask(1, 1, 1, 0.0),
@@ -736,9 +825,9 @@ mod tests {
 
         assert_eq!(result.assignments.len(), 1);
 
-        // With excess supply and all workers at min_wage=0, wage should be 0
+        // With FavorSellers, wage = employer's bid
         let wage = *result.clearing_wages.get(&skill(1)).unwrap();
-        assert_eq!(wage, 0.0, "excess labor should drive wage to floor");
+        assert_eq!(wage, 50.0, "wage should equal employer's bid");
     }
 
     #[test]
@@ -785,5 +874,256 @@ mod tests {
         assert_eq!(mp_2, 10.0);
         assert_eq!(mp_3, 5.0);
         assert_eq!(mp_4, 0.0);
+    }
+
+    /// Test that wages rise when labor becomes scarce.
+    ///
+    /// Scenario:
+    /// - 2 facilities, each wants 3 workers (6 total slots)
+    /// - Start with 6 workers (no scarcity) → wages low
+    /// - Remove 2 workers (now 4 workers, 6 slots) → scarcity
+    /// - Facilities compete, bidding up to their MVP
+    /// - Wages rise until one facility is priced out
+    #[test]
+    fn scarcity_drives_wages_up() {
+        let skills = vec![skill_def(1, "Laborer", None)];
+        let laborer = skill(1);
+
+        // Two facilities with different MVPs
+        // Facility 1: MVP = 100 (high value production)
+        // Facility 2: MVP = 50 (lower value production)
+        // Each wants 3 workers
+        let facility_1_mvp = 100.0;
+        let facility_2_mvp = 50.0;
+
+        // Workers all have min_wage = 10
+        let worker_min_wage = 10.0;
+
+        // --- Phase 1: No scarcity (6 workers, 6 slots) ---
+        let bids_full = vec![
+            // Facility 1 bids for 3 workers at MVP=100
+            bid(1, 1, 1, facility_1_mvp),
+            bid(2, 1, 1, facility_1_mvp),
+            bid(3, 1, 1, facility_1_mvp),
+            // Facility 2 bids for 3 workers at MVP=50
+            bid(4, 2, 1, facility_2_mvp),
+            bid(5, 2, 1, facility_2_mvp),
+            bid(6, 2, 1, facility_2_mvp),
+        ];
+
+        let asks_full = vec![
+            ask(1, 1, 1, worker_min_wage),
+            ask(2, 2, 1, worker_min_wage),
+            ask(3, 3, 1, worker_min_wage),
+            ask(4, 4, 1, worker_min_wage),
+            ask(5, 5, 1, worker_min_wage),
+            ask(6, 6, 1, worker_min_wage),
+        ];
+
+        let mut wage_emas = emas(&[(1, 30.0)]); // starting EMA
+        let facility_budgets = budgets(&[(1, 1000.0), (2, 1000.0)]);
+
+        let result_full = clear_labor_markets(
+            &skills,
+            &bids_full,
+            &asks_full,
+            &wage_emas,
+            &facility_budgets,
+        );
+
+        // All 6 workers should be hired
+        assert_eq!(
+            result_full.assignments.len(),
+            6,
+            "all workers hired when no scarcity"
+        );
+
+        // With FavorSellers, wage = min(filled bids) = 50 (facility 2's bid)
+        let wage_no_scarcity = *result_full.clearing_wages.get(&laborer).unwrap();
+        assert_eq!(
+            wage_no_scarcity, facility_2_mvp,
+            "wage at marginal employer's bid (50)"
+        );
+
+        // Count workers per facility
+        let f1_hires: usize = result_full
+            .assignments
+            .iter()
+            .filter(|a| a.facility_id == FacilityId(1))
+            .count();
+        let f2_hires: usize = result_full
+            .assignments
+            .iter()
+            .filter(|a| a.facility_id == FacilityId(2))
+            .count();
+        assert_eq!(f1_hires, 3, "facility 1 gets 3 workers");
+        assert_eq!(f2_hires, 3, "facility 2 gets 3 workers");
+
+        // Update wage EMA
+        update_wage_emas(&mut wage_emas, &result_full);
+
+        // --- Phase 2: Create scarcity (4 workers, 6 slots) ---
+        // Remove 2 workers - now facilities must compete
+        let asks_scarce = vec![
+            ask(1, 1, 1, worker_min_wage),
+            ask(2, 2, 1, worker_min_wage),
+            ask(3, 3, 1, worker_min_wage),
+            ask(4, 4, 1, worker_min_wage),
+            // Workers 5 and 6 are gone
+        ];
+
+        let result_scarce = clear_labor_markets(
+            &skills,
+            &bids_full,
+            &asks_scarce,
+            &wage_emas,
+            &facility_budgets,
+        );
+
+        // Only 4 workers can be hired
+        assert_eq!(
+            result_scarce.assignments.len(),
+            4,
+            "only 4 workers available"
+        );
+
+        // With FavorSellers and 4 workers for 6 slots:
+        // Top 4 bids: 100, 100, 100, 50 (3 from facility 1, 1 from facility 2)
+        // Clearing = min(filled bids) = 50
+        let wage_scarce = *result_scarce.clearing_wages.get(&laborer).unwrap();
+        assert_eq!(wage_scarce, 50.0, "wage = min(filled bids) = 50");
+
+        // Count workers per facility - higher MVP facility should get priority
+        let f1_hires_scarce: usize = result_scarce
+            .assignments
+            .iter()
+            .filter(|a| a.facility_id == FacilityId(1))
+            .count();
+        let f2_hires_scarce: usize = result_scarce
+            .assignments
+            .iter()
+            .filter(|a| a.facility_id == FacilityId(2))
+            .count();
+
+        // Facility 1 (MVP=100) should get all 3 slots filled
+        // Facility 2 (MVP=50) gets remaining 1 worker
+        assert_eq!(f1_hires_scarce, 3, "high-MVP facility 1 fills all slots");
+        assert_eq!(
+            f2_hires_scarce, 1,
+            "low-MVP facility 2 gets remaining worker"
+        );
+    }
+
+    /// Test that when workers have higher min_wage, scarcity DOES raise clearing wage.
+    /// Test that wages rise to marginal MVP when there's labor scarcity.
+    ///
+    /// With 3 workers and 4 slots (MVPs: 100, 80, 60, 40):
+    /// - Facility 4 (MVP=40) should be priced out
+    /// - Wage should stabilize around 40-60 (the marginal viable MVP)
+    #[test]
+    fn scarcity_raises_wage_to_marginal_mvp() {
+        let skills = vec![skill_def(1, "Laborer", None)];
+        let laborer = skill(1);
+
+        // 4 facilities with different MVPs
+        let mvps = [100.0, 80.0, 60.0, 40.0];
+
+        // 3 workers (scarcity), all with min_wage = 5
+        let asks = vec![ask(1, 1, 1, 5.0), ask(2, 2, 1, 5.0), ask(3, 3, 1, 5.0)];
+
+        // Track each facility's current bid (starts at wage_ema)
+        let mut facility_bids = [10.0, 10.0, 10.0, 10.0]; // start low
+        let mut wage_ema = emas(&[(1, 10.0)]);
+        let facility_budgets = budgets(&[(1, 1000.0), (2, 1000.0), (3, 1000.0), (4, 1000.0)]);
+
+        println!("=== Scarcity Raises Wage to Marginal MVP ===\n");
+        println!("Setup: 4 facilities (MVP=100,80,60,40), 3 workers (min_wage=5)");
+        println!("Expected: wage rises until facility 4 (MVP=40) is priced out\n");
+
+        let mut last_hires = [false; 4];
+
+        for tick in 0..50 {
+            // Build bids based on current facility_bids
+            let bids: Vec<_> = (0..4)
+                .map(|i| bid((i + 1) as u64, (i + 1) as u32, 1, facility_bids[i]))
+                .collect();
+
+            let result = clear_labor_markets(&skills, &bids, &asks, &wage_ema, &facility_budgets);
+            let wage = result.clearing_wages.get(&laborer).copied().unwrap_or(0.0);
+
+            // Track which facilities got workers
+            let hires: Vec<bool> = (1..=4)
+                .map(|f| {
+                    result
+                        .assignments
+                        .iter()
+                        .any(|a| a.facility_id == FacilityId(f))
+                })
+                .collect();
+
+            // Count global workers vs jobs
+            let total_workers = asks.len();
+            let total_jobs = bids.len();
+
+            if !(5..45).contains(&tick) {
+                println!(
+                    "Tick {:>2}: bids={:>5.1},{:>5.1},{:>5.1},{:>5.1} | clearing={:>5.1} | hired={:?}",
+                    tick,
+                    facility_bids[0],
+                    facility_bids[1],
+                    facility_bids[2],
+                    facility_bids[3],
+                    wage,
+                    hires
+                );
+            } else if tick == 5 {
+                println!("...");
+            }
+
+            update_wage_emas(&mut wage_ema, &result);
+
+            // Adjust bids for next tick
+            for i in 0..4 {
+                let filled = hires[i];
+                let mvp = mvps[i];
+
+                if !filled {
+                    // Unfilled: raise bid (up to MVP)
+                    facility_bids[i] = (facility_bids[i] * 1.2).min(mvp);
+                } else if total_workers > total_jobs {
+                    // Filled + excess workers: lower bid
+                    facility_bids[i] = (facility_bids[i] * 0.95).max(5.0);
+                }
+                // else: filled + tight market: hold steady
+            }
+
+            last_hires = [hires[0], hires[1], hires[2], hires[3]];
+        }
+
+        let final_ema = *wage_ema.get(&laborer).unwrap();
+        println!("\nFinal state:");
+        println!("  Wage EMA: {:.1}", final_ema);
+        println!("  Facility 4 (MVP=40) hired: {}", last_hires[3]);
+
+        // Assertions:
+        // 1. Wage should have risen significantly above starting point (10)
+        assert!(
+            final_ema > 30.0,
+            "Wage should rise toward marginal MVP (~40), got {:.1}",
+            final_ema
+        );
+
+        // 2. Facility 4 should eventually be priced out (not hiring)
+        assert!(
+            !last_hires[3],
+            "Facility 4 (MVP=40) should be priced out when wage >= 40"
+        );
+
+        // 3. Top 3 facilities should still be hiring
+        assert!(
+            last_hires[0] && last_hires[1] && last_hires[2],
+            "Top 3 facilities should still hire: {:?}",
+            last_hires
+        );
     }
 }

@@ -8,10 +8,10 @@ use crate::types::{AgentId, GoodId, GoodProfile, Price, SettlementId};
 
 // === CONSTANTS ===
 
-const BUFFER_TICKS: f64 = 5.0;
-const PRICE_SWEEP_MIN: f64 = 0.6;
-const PRICE_SWEEP_MAX: f64 = 1.4;
-const PRICE_SWEEP_POINTS: usize = 9;
+pub const BUFFER_TICKS: f64 = 5.0;
+pub const PRICE_SWEEP_MIN: f64 = 0.6;
+pub const PRICE_SWEEP_MAX: f64 = 1.4;
+pub const PRICE_SWEEP_POINTS: usize = 9;
 
 // === DEMAND CURVE FUNCTIONS ===
 
@@ -21,7 +21,7 @@ const PRICE_SWEEP_POINTS: usize = 9;
 /// - norm_c: current_stock / target (1.0 = at target)
 ///
 /// Returns value in [0, 1] representing fraction of desired_ema to buy.
-fn qty_norm(norm_p: f64, norm_c: f64) -> f64 {
+pub fn qty_norm(norm_p: f64, norm_c: f64) -> f64 {
     let shortfall = (1.0 - norm_c).max(0.0);
     let price_factor = 1.0 - norm_p;
     (shortfall * (0.3 + 0.7 * price_factor)).clamp(0.0, 1.0)
@@ -29,7 +29,7 @@ fn qty_norm(norm_p: f64, norm_c: f64) -> f64 {
 
 /// Quantity supplied as fraction of desired_ema.
 /// Inverts both inputs to reuse qty_norm logic for supply curve.
-fn qty_sell(norm_p: f64, norm_c: f64) -> f64 {
+pub fn qty_sell(norm_p: f64, norm_c: f64) -> f64 {
     qty_norm(1.0 / norm_p, 1.0 / norm_c)
 }
 
@@ -37,7 +37,7 @@ fn qty_sell(norm_p: f64, norm_c: f64) -> f64 {
 
 /// Generate demand curve orders for a population.
 /// Sweeps across price points and generates orders at each level.
-fn generate_demand_curve_orders(
+pub fn generate_demand_curve_orders(
     pop: &Pop,
     good_profiles: &[GoodProfile],
     price_ema: &HashMap<GoodId, Price>,
@@ -64,12 +64,13 @@ fn generate_demand_curve_orders(
 
         if current_stock < target {
             // Buying mode: sweep prices from low to high
+            // Quantity is fraction of TARGET so we buy enough to reach buffer
             for i in 0..PRICE_SWEEP_POINTS {
                 let norm_p = PRICE_SWEEP_MIN
                     + (PRICE_SWEEP_MAX - PRICE_SWEEP_MIN) * (i as f64)
                         / ((PRICE_SWEEP_POINTS - 1) as f64);
                 let qty_frac = qty_norm(norm_p, norm_c);
-                let qty = qty_frac * desired_ema;
+                let qty = qty_frac * target;
 
                 if qty > 0.001 {
                     orders.push(Order {
@@ -85,14 +86,16 @@ fn generate_demand_curve_orders(
         } else {
             // Selling mode: sweep prices from low to high
             // Supply curve: higher price = more willing to sell
+            // Quantity is fraction of excess above target
             let sell_min = 0.7;
             let sell_max = 1.0 / PRICE_SWEEP_MIN; // ~1.67
+            let excess = current_stock - target;
 
             for i in 0..PRICE_SWEEP_POINTS {
                 let norm_p = sell_min
                     + (sell_max - sell_min) * (i as f64) / ((PRICE_SWEEP_POINTS - 1) as f64);
                 let qty_frac = qty_sell(norm_p, norm_c);
-                let qty = qty_frac * desired_ema;
+                let qty = qty_frac * excess;
 
                 if qty > 0.001 {
                     orders.push(Order {
@@ -156,6 +159,9 @@ pub fn run_settlement_tick(
 
     // 1. CONSUMPTION PHASE
     for pop in pops.iter_mut() {
+        // Reset need satisfaction for this tick (it's per-tick, not cumulative)
+        pop.need_satisfaction.clear();
+
         let result = consumption::compute_consumption(
             &pop.stocks,
             good_profiles,
@@ -192,7 +198,7 @@ pub fn run_settlement_tick(
     }
 
     for merchant in merchants.iter() {
-        let mut orders = merchant.generate_orders(price_ema);
+        let mut orders = merchant.generate_orders(settlement, price_ema);
         for o in &mut orders {
             o.id = next_order_id;
             next_order_id += 1;

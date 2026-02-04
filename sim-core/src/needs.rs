@@ -25,7 +25,8 @@ impl UtilityCurve {
                 if ratio < 1.0 {
                     steepness * (1.0 - ratio).powi(2)
                 } else {
-                    0.01 / ratio
+                    // Once satisfied, MU drops to 0 (won't overconsume subsistence goods)
+                    0.0
                 }
             }
             Self::LogDiminishing { scale } => scale / (1.0 + current_satisfaction),

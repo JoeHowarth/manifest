@@ -95,38 +95,97 @@ pub fn clear_single_market(
     let mut remaining_demand = max_volume;
     let mut remaining_supply = max_volume;
 
-    // Fill buys (highest bidders first, they all pay clearing price)
-    for buy in &buys {
-        if buy.limit_price < price || remaining_demand <= 0.0 {
+    // Fill buys with proportional allocation at same price levels
+    // Group buys by price level (descending)
+    let mut buy_idx = 0;
+    while buy_idx < buys.len() && remaining_demand > 0.0 {
+        let current_price = buys[buy_idx].limit_price;
+        if current_price < price {
+            break;
+        }
+
+        // Collect all buys at this price level
+        let mut price_level_buys: Vec<&Order> = Vec::new();
+        let mut price_level_demand = 0.0;
+        while buy_idx < buys.len() && (buys[buy_idx].limit_price - current_price).abs() < 1e-9 {
+            if buys[buy_idx].limit_price >= price {
+                price_level_buys.push(buys[buy_idx]);
+                price_level_demand += buys[buy_idx].quantity;
+            }
+            buy_idx += 1;
+        }
+
+        if price_level_buys.is_empty() {
             continue;
         }
-        let fill_qty = buy.quantity.min(remaining_demand);
-        remaining_demand -= fill_qty;
-        fills.push(Fill {
-            order_id: buy.id,
-            agent_id: buy.agent_id,
-            good,
-            side: Side::Buy,
-            quantity: fill_qty,
-            price,
-        });
+
+        // Proportional allocation at this price level
+        let fill_ratio = if price_level_demand > remaining_demand {
+            remaining_demand / price_level_demand
+        } else {
+            1.0
+        };
+
+        for buy in price_level_buys {
+            let fill_qty = buy.quantity * fill_ratio;
+            if fill_qty > 0.0 {
+                remaining_demand -= fill_qty;
+                fills.push(Fill {
+                    order_id: buy.id,
+                    agent_id: buy.agent_id,
+                    good,
+                    side: Side::Buy,
+                    quantity: fill_qty,
+                    price,
+                });
+            }
+        }
     }
 
-    // Fill sells (lowest askers first, they all receive clearing price)
-    for sell in &sells {
-        if sell.limit_price > price || remaining_supply <= 0.0 {
+    // Fill sells with proportional allocation at same price levels
+    let mut sell_idx = 0;
+    while sell_idx < sells.len() && remaining_supply > 0.0 {
+        let current_price = sells[sell_idx].limit_price;
+        if current_price > price {
+            break;
+        }
+
+        // Collect all sells at this price level
+        let mut price_level_sells: Vec<&Order> = Vec::new();
+        let mut price_level_supply = 0.0;
+        while sell_idx < sells.len() && (sells[sell_idx].limit_price - current_price).abs() < 1e-9 {
+            if sells[sell_idx].limit_price <= price {
+                price_level_sells.push(sells[sell_idx]);
+                price_level_supply += sells[sell_idx].quantity;
+            }
+            sell_idx += 1;
+        }
+
+        if price_level_sells.is_empty() {
             continue;
         }
-        let fill_qty = sell.quantity.min(remaining_supply);
-        remaining_supply -= fill_qty;
-        fills.push(Fill {
-            order_id: sell.id,
-            agent_id: sell.agent_id,
-            good,
-            side: Side::Sell,
-            quantity: fill_qty,
-            price,
-        });
+
+        // Proportional allocation at this price level
+        let fill_ratio = if price_level_supply > remaining_supply {
+            remaining_supply / price_level_supply
+        } else {
+            1.0
+        };
+
+        for sell in price_level_sells {
+            let fill_qty = sell.quantity * fill_ratio;
+            if fill_qty > 0.0 {
+                remaining_supply -= fill_qty;
+                fills.push(Fill {
+                    order_id: sell.id,
+                    agent_id: sell.agent_id,
+                    good,
+                    side: Side::Sell,
+                    quantity: fill_qty,
+                    price,
+                });
+            }
+        }
     }
 
     MarketClearResult {
@@ -332,5 +391,109 @@ pub fn apply_fill_merchant(merchant: &mut MerchantAgent, settlement: SettlementI
         Side::Sell => {
             stockpile.remove(fill.good, fill.quantity);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_buy(id: u64, agent_id: u32, qty: f64, price: f64) -> Order {
+        Order {
+            id,
+            agent_id,
+            good: 1,
+            side: Side::Buy,
+            quantity: qty,
+            limit_price: price,
+        }
+    }
+
+    fn make_sell(id: u64, agent_id: u32, qty: f64, price: f64) -> Order {
+        Order {
+            id,
+            agent_id,
+            good: 1,
+            side: Side::Sell,
+            quantity: qty,
+            limit_price: price,
+        }
+    }
+
+    #[test]
+    fn proportional_allocation_at_same_price() {
+        // Facility A wants 20 workers at price 10
+        // Facility B wants 30 workers at price 10
+        // Only 10 workers available at price 5
+        // Expected: A gets 4, B gets 6 (proportional to 20:30 = 2:3)
+
+        let mut orders = Vec::new();
+
+        // Facility A (agent_id=1) bids for 20 at price 10
+        for i in 0..20 {
+            orders.push(make_buy(i, 1, 1.0, 10.0));
+        }
+
+        // Facility B (agent_id=2) bids for 30 at price 10
+        for i in 20..50 {
+            orders.push(make_buy(i, 2, 1.0, 10.0));
+        }
+
+        // 10 workers available at price 5
+        for i in 100..110 {
+            orders.push(make_sell(i, i as u32, 1.0, 5.0));
+        }
+
+        let result = clear_single_market(1, &orders, PriceBias::FavorSellers);
+
+        assert!(result.clearing_price.is_some());
+        let price = result.clearing_price.unwrap();
+        assert!(
+            (price - 10.0).abs() < 0.01,
+            "clearing price should be 10, got {}",
+            price
+        );
+
+        // Count fills per agent
+        let agent_1_fills: f64 = result
+            .fills
+            .iter()
+            .filter(|f| f.agent_id == 1 && matches!(f.side, Side::Buy))
+            .map(|f| f.quantity)
+            .sum();
+
+        let agent_2_fills: f64 = result
+            .fills
+            .iter()
+            .filter(|f| f.agent_id == 2 && matches!(f.side, Side::Buy))
+            .map(|f| f.quantity)
+            .sum();
+
+        // A wants 20, B wants 30, total 50. Only 10 available.
+        // A should get 20/50 * 10 = 4
+        // B should get 30/50 * 10 = 6
+        assert!(
+            (agent_1_fills - 4.0).abs() < 0.01,
+            "Agent 1 should get 4, got {}",
+            agent_1_fills
+        );
+        assert!(
+            (agent_2_fills - 6.0).abs() < 0.01,
+            "Agent 2 should get 6, got {}",
+            agent_2_fills
+        );
+
+        // Total should be 10
+        let total_fills: f64 = result
+            .fills
+            .iter()
+            .filter(|f| matches!(f.side, Side::Buy))
+            .map(|f| f.quantity)
+            .sum();
+        assert!(
+            (total_fills - 10.0).abs() < 0.01,
+            "Total fills should be 10, got {}",
+            total_fills
+        );
     }
 }

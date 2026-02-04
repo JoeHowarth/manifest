@@ -186,7 +186,6 @@ mod tests {
     // Test goods
     const GRAIN: GoodId = 1;
     const BREAD: GoodId = 2;
-    const FISH: GoodId = 3;
 
     // Test skills
     fn laborer() -> SkillId {

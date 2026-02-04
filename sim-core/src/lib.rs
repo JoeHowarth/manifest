@@ -72,6 +72,7 @@ pub mod consumption;
 pub mod geography;
 pub mod labor;
 pub mod market;
+pub mod mortality;
 pub mod needs;
 pub mod production;
 pub mod tick;
@@ -123,3 +124,8 @@ pub use needs::{Need, UtilityCurve};
 #[allow(deprecated)]
 pub use tick::run_market_tick;
 pub use tick::run_settlement_tick;
+pub use tick::{BUFFER_TICKS, PRICE_SWEEP_MAX, PRICE_SWEEP_MIN, PRICE_SWEEP_POINTS};
+pub use tick::{generate_demand_curve_orders, qty_norm, qty_sell};
+
+// Mortality
+pub use mortality::{MortalityOutcome, check_mortality, death_probability, growth_probability};

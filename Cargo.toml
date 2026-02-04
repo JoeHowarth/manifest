@@ -1,3 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["sim-core"]
+
+[profile.release]
+opt-level = "s"
+lto = true
