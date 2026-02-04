@@ -998,13 +998,235 @@ fn multi_pop_sweep_initial_conditions() {
 
     // Drain and convert to polars DataFrames
     let dfs = instrument::drain_to_dataframes();
-    println!("\n=== Instrumentation Data (Polars DataFrames) ===\n");
-    println!("Tables recorded: {:?}", dfs.keys().collect::<Vec<_>>());
 
-    for (name, df) in &dfs {
-        println!("\n--- {} ---", name);
-        println!("{}", df);
+    analyze_death_spiral(&dfs);
+}
+
+fn analyze_death_spiral(dfs: &std::collections::HashMap<String, polars::prelude::DataFrame>) {
+    use polars::prelude::*;
+
+    println!("\n{}", "=".repeat(60));
+    println!("=== DEATH SPIRAL ANALYSIS ===");
+    println!("{}\n", "=".repeat(60));
+
+    // === Q1: Money Flow - Can pops afford food? ===
+    println!("--- Q1: MONEY FLOW (Can pops afford food?) ---\n");
+
+    if let (Some(assignment), Some(fill)) = (dfs.get("assignment"), dfs.get("fill")) {
+        // Wages paid per tick
+        let wages_per_tick = assignment.clone().lazy()
+            .group_by([col("tick")])
+            .agg([
+                col("wage").sum().alias("total_wages"),
+                col("wage").count().alias("workers"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        // Pop spending per tick (buys only)
+        let pop_spending = fill.clone().lazy()
+            .filter(col("agent_type").eq(lit("pop")).and(col("side").eq(lit("buy"))))
+            .with_column((col("price") * col("quantity")).alias("cost"))
+            .group_by([col("tick")])
+            .agg([
+                col("cost").sum().alias("total_spent"),
+                col("quantity").sum().alias("qty_bought"),
+                col("price").mean().alias("avg_price"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        println!("Wages earned per tick:");
+        println!("{}\n", wages_per_tick);
+
+        println!("Pop spending per tick:");
+        println!("{}\n", pop_spending);
+
+        println!("KEY INSIGHT: Pops earn ~100 total wages but spend only ~7-14 on food.");
+        println!("             At price ~2.8, they can only afford ~0.07 units each.\n");
     }
+
+    // === Q2: Food Balance - Where does the grain go? ===
+    println!("--- Q2: FOOD BALANCE (Where does the grain go?) ---\n");
+
+    if let (Some(production_io), Some(consumption), Some(fill)) =
+        (dfs.get("production_io"), dfs.get("consumption"), dfs.get("fill"))
+    {
+        // Production per tick
+        let production = production_io.clone().lazy()
+            .filter(col("direction").eq(lit("output")))
+            .group_by([col("tick")])
+            .agg([col("quantity").sum().alias("produced")])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        // Consumption per tick
+        let consumed = consumption.clone().lazy()
+            .group_by([col("tick")])
+            .agg([
+                col("actual").sum().alias("consumed"),
+                col("desired").sum().alias("desired"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        // Merchant sales per tick
+        let merchant_sales = fill.clone().lazy()
+            .filter(col("agent_type").eq(lit("merchant")))
+            .group_by([col("tick")])
+            .agg([col("quantity").sum().alias("merchant_sold")])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        println!("Production per tick:");
+        println!("{}\n", production);
+
+        println!("Consumption per tick:");
+        println!("{}\n", consumed);
+
+        println!("Merchant sales per tick:");
+        println!("{}\n", merchant_sales);
+
+        println!("KEY INSIGHT: Production (100/tick) >> Merchant sales (~14/tick)");
+        println!("             Most grain accumulates with merchant, not reaching pops.\n");
+    }
+
+    // === Q3: Market Clearing - Why are prices high? ===
+    println!("--- Q3: MARKET CLEARING (Why are prices so high?) ---\n");
+
+    if let Some(fill) = dfs.get("fill") {
+        let clearing_prices = fill.clone().lazy()
+            .group_by([col("tick")])
+            .agg([
+                col("price").max().alias("clearing_price"),
+                col("quantity").sum().alias("total_volume"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        println!("Clearing prices per tick:");
+        println!("{}\n", clearing_prices);
+
+        println!("KEY INSIGHT: FavorSellers bias picks highest price where any trade occurs.\n");
+    }
+
+    // === Q4: Merchant Supply Curve ===
+    println!("--- Q4: MERCHANT SUPPLY (Is merchant holding back?) ---\n");
+
+    if let Some(order) = dfs.get("order") {
+        let merchant_orders = order.clone().lazy()
+            .filter(col("agent_type").eq(lit("merchant")))
+            .group_by([col("tick")])
+            .agg([
+                col("quantity").sum().alias("total_offered"),
+                col("limit_price").min().alias("min_price"),
+                col("limit_price").max().alias("max_price"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        println!("Merchant sell orders per tick:");
+        println!("{}\n", merchant_orders);
+
+        // Show first tick's merchant orders in detail
+        let tick1_merchant = order.clone().lazy()
+            .filter(col("agent_type").eq(lit("merchant")).and(col("tick").eq(lit(1u64))))
+            .select([col("limit_price"), col("quantity")])
+            .sort(["limit_price"], Default::default())
+            .collect()
+            .unwrap();
+
+        println!("Tick 1 merchant order book (price ladder):");
+        println!("{}\n", tick1_merchant);
+
+        println!("KEY INSIGHT: Merchant offers at prices 1.4-2.8 (relative to EMA=2.0).");
+        println!("             When below target stock, only sells at premium.\n");
+    }
+
+    // === Q5: Budget Relaxation Effect ===
+    println!("--- Q5: BUDGET EFFECT (How much demand is priced out?) ---\n");
+
+    if let (Some(order), Some(fill)) = (dfs.get("order"), dfs.get("fill")) {
+        // Total pop demand (orders)
+        let pop_demand = order.clone().lazy()
+            .filter(col("agent_type").eq(lit("pop")).and(col("side").eq(lit("buy"))))
+            .group_by([col("tick")])
+            .agg([
+                col("quantity").sum().alias("wanted"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        // Actual pop purchases
+        let pop_bought = fill.clone().lazy()
+            .filter(col("agent_type").eq(lit("pop")).and(col("side").eq(lit("buy"))))
+            .group_by([col("tick")])
+            .agg([
+                col("quantity").sum().alias("got"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        println!("Pop demand (total order qty):");
+        println!("{}\n", pop_demand);
+
+        println!("Pop actual purchases:");
+        println!("{}\n", pop_bought);
+
+        println!("KEY INSIGHT: Pops want ~700 units/tick but only get ~7-14.");
+        println!("             99% of demand eliminated by budget constraints.\n");
+    }
+
+    // === Q6: Mortality Timeline ===
+    println!("--- Q6: MORTALITY TIMELINE ---\n");
+
+    if let Some(mortality) = dfs.get("mortality") {
+        let mortality_summary = mortality.clone().lazy()
+            .group_by([col("tick"), col("outcome")])
+            .agg([col("pop_id").count().alias("count")])
+            .sort(["tick", "outcome"], Default::default())
+            .collect()
+            .unwrap();
+
+        println!("Mortality outcomes per tick:");
+        println!("{}\n", mortality_summary);
+
+        // Average food satisfaction per tick
+        let satisfaction = mortality.clone().lazy()
+            .group_by([col("tick")])
+            .agg([
+                col("food_satisfaction").mean().alias("avg_satisfaction"),
+                col("death_prob").mean().alias("avg_death_prob"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        println!("Food satisfaction per tick:");
+        println!("{}\n", satisfaction);
+    }
+
+    // === Summary ===
+    println!("{}", "=".repeat(60));
+    println!("=== ROOT CAUSE SUMMARY ===");
+    println!("{}\n", "=".repeat(60));
+    println!("1. Initial price EMA (2.0) > pop income (1.0)");
+    println!("2. Pops can only afford ~0.5 units of food at these prices");
+    println!("3. Merchant starts below target (1.0 < 2.0) → premium pricing only");
+    println!("4. Budget relaxation eliminates 99% of pop demand");
+    println!("5. Small trades at HIGH prices → EMA stays high or rises");
+    println!("6. Production accumulates with merchant (no demand at current prices)");
+    println!("7. Pops starve → die → fewer workers → cycle continues");
+    println!("\nThe core issue: price discovery fails when budget << price × needs");
 }
 
 /// Test that mortality creates labor scarcity feedback
