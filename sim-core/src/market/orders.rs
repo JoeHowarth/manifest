@@ -2,7 +2,7 @@ use crate::types::{AgentId, GoodId, Price, Quantity};
 
 // === ORDERS & FILLS ===
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Order {
     pub id: u64,
     pub agent_id: AgentId,
@@ -12,12 +12,13 @@ pub struct Order {
     pub limit_price: Price,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum Side {
     Buy,
     Sell,
 }
 
+#[derive(Debug, Clone)]
 pub struct Fill {
     pub order_id: u64,
     pub agent_id: AgentId,

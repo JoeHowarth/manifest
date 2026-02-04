@@ -62,6 +62,107 @@ impl World {
         }
     }
 
+    // === Simulation Tick ===
+
+    /// Run one simulation tick across all settlements.
+    ///
+    /// Tick phases:
+    /// 0. Labor - pay wages to employed pops
+    /// 1. Production - facilities produce goods using workers and inputs
+    /// 2. Consumption - pops consume goods to satisfy needs
+    /// 3. Market clearing - call auction for each settlement
+    /// 4. Price EMA update
+    pub fn run_tick(
+        &mut self,
+        good_profiles: &[crate::types::GoodProfile],
+        needs: &std::collections::HashMap<String, crate::needs::Need>,
+        recipes: &[Recipe],
+    ) {
+        use crate::tick::run_settlement_tick;
+
+        self.tick += 1;
+
+        // === 0. LABOR PHASE ===
+        self.run_labor_phase();
+
+        // === 1. PRODUCTION PHASE ===
+        self.run_production_phase(recipes);
+
+        // Process each settlement
+        let settlement_ids: Vec<SettlementId> = self.settlements.keys().copied().collect();
+
+        for settlement_id in settlement_ids {
+            // Extract price EMA for this settlement
+            let mut settlement_prices: HashMap<GoodId, Price> = good_profiles
+                .iter()
+                .map(|gp| {
+                    let price = self
+                        .price_ema
+                        .get(&(settlement_id, gp.good))
+                        .copied()
+                        .unwrap_or(1.0);
+                    (gp.good, price)
+                })
+                .collect();
+
+            // Get pop IDs at this settlement
+            let pop_ids: Vec<PopId> = self
+                .settlements
+                .get(&settlement_id)
+                .map(|s| s.pop_ids.clone())
+                .unwrap_or_default();
+
+            // Get merchant IDs with presence at this settlement
+            let merchant_ids: Vec<MerchantId> = self.merchants_at_settlement(settlement_id);
+
+            // Temporarily extract pops and merchants to get mutable refs
+            let mut extracted_pops: Vec<(PopId, Pop)> = pop_ids
+                .iter()
+                .filter_map(|id| self.pops.remove(id).map(|p| (*id, p)))
+                .collect();
+
+            let mut extracted_merchants: Vec<(MerchantId, MerchantAgent)> = merchant_ids
+                .iter()
+                .filter_map(|id| self.merchants.remove(id).map(|m| (*id, m)))
+                .collect();
+
+            // Create mutable reference slices
+            let mut pop_refs: Vec<&mut Pop> = extracted_pops.iter_mut().map(|(_, p)| p).collect();
+            let mut merchant_refs: Vec<&mut MerchantAgent> =
+                extracted_merchants.iter_mut().map(|(_, m)| m).collect();
+
+            // Run the settlement tick
+            let _result = run_settlement_tick(
+                settlement_id,
+                &mut pop_refs,
+                &mut merchant_refs,
+                good_profiles,
+                needs,
+                &mut settlement_prices,
+            );
+
+            // Sum of fills per good
+            let sum_fills = _result.fills.iter().fold(0.0, |acc, f| acc + f.quantity);
+            dbg!(sum_fills);
+
+            // Put pops and merchants back
+            for (id, pop) in extracted_pops {
+                self.pops.insert(id, pop);
+            }
+            for (id, merchant) in extracted_merchants {
+                self.merchants.insert(id, merchant);
+            }
+
+            // Merge settlement prices back into world price_ema
+            for (good, price) in settlement_prices {
+                self.price_ema.insert((settlement_id, good), price);
+            }
+        }
+
+        // === 5. MORTALITY PHASE ===
+        self.run_mortality_phase();
+    }
+
     // === Settlement Management ===
 
     /// Add a settlement to the world, returns its ID
@@ -413,18 +514,18 @@ impl World {
         // Debug: print labor market clearing results
         #[cfg(debug_assertions)]
         if !result.assignments.is_empty() || !bids.is_empty() || !asks.is_empty() {
-            eprintln!(
-                "[Labor] bids={}, asks={}, assignments={}",
-                bids.len(),
-                asks.len(),
-                result.assignments.len()
-            );
-            for a in &result.assignments {
-                eprintln!(
-                    "[Labor]   Assignment: worker={} -> facility={:?} skill={:?} wage={}",
-                    a.worker_id, a.facility_id, a.skill, a.wage
-                );
-            }
+            // eprintln!(
+            //     "[Labor] bids={}, asks={}, assignments={}",
+            //     bids.len(),
+            //     asks.len(),
+            //     result.assignments.len()
+            // );
+            // for a in &result.assignments {
+            //     eprintln!(
+            //         "[Labor]   Assignment: worker={} -> facility={:?} skill={:?} wage={}",
+            //         a.worker_id, a.facility_id, a.skill, a.wage
+            //     );
+            // }
         }
 
         // Update wage EMAs
@@ -529,10 +630,10 @@ impl World {
         // Debug: print facility workers after assignment
         #[cfg(debug_assertions)]
         for facility in self.facilities.values() {
-            eprintln!(
-                "[Labor] Facility {:?} workers after assignment: {:?}",
-                facility.id, facility.workers
-            );
+            // eprintln!(
+            //     "[Labor] Facility {:?} workers after assignment: {:?}",
+            //     facility.id, facility.workers
+            // );
         }
     }
 
@@ -596,102 +697,6 @@ impl World {
         }
     }
 
-    // === Simulation Tick ===
-
-    /// Run one simulation tick across all settlements.
-    ///
-    /// Tick phases:
-    /// 0. Labor - pay wages to employed pops
-    /// 1. Production - facilities produce goods using workers and inputs
-    /// 2. Consumption - pops consume goods to satisfy needs
-    /// 3. Market clearing - call auction for each settlement
-    /// 4. Price EMA update
-    pub fn run_tick(
-        &mut self,
-        good_profiles: &[crate::types::GoodProfile],
-        needs: &std::collections::HashMap<String, crate::needs::Need>,
-        recipes: &[Recipe],
-    ) {
-        use crate::tick::run_settlement_tick;
-
-        self.tick += 1;
-
-        // === 0. LABOR PHASE ===
-        self.run_labor_phase();
-
-        // === 1. PRODUCTION PHASE ===
-        self.run_production_phase(recipes);
-
-        // Process each settlement
-        let settlement_ids: Vec<SettlementId> = self.settlements.keys().copied().collect();
-
-        for settlement_id in settlement_ids {
-            // Extract price EMA for this settlement
-            let mut settlement_prices: HashMap<GoodId, Price> = good_profiles
-                .iter()
-                .map(|gp| {
-                    let price = self
-                        .price_ema
-                        .get(&(settlement_id, gp.good))
-                        .copied()
-                        .unwrap_or(1.0);
-                    (gp.good, price)
-                })
-                .collect();
-
-            // Get pop IDs at this settlement
-            let pop_ids: Vec<PopId> = self
-                .settlements
-                .get(&settlement_id)
-                .map(|s| s.pop_ids.clone())
-                .unwrap_or_default();
-
-            // Get merchant IDs with presence at this settlement
-            let merchant_ids: Vec<MerchantId> = self.merchants_at_settlement(settlement_id);
-
-            // Temporarily extract pops and merchants to get mutable refs
-            let mut extracted_pops: Vec<(PopId, Pop)> = pop_ids
-                .iter()
-                .filter_map(|id| self.pops.remove(id).map(|p| (*id, p)))
-                .collect();
-
-            let mut extracted_merchants: Vec<(MerchantId, MerchantAgent)> = merchant_ids
-                .iter()
-                .filter_map(|id| self.merchants.remove(id).map(|m| (*id, m)))
-                .collect();
-
-            // Create mutable reference slices
-            let mut pop_refs: Vec<&mut Pop> = extracted_pops.iter_mut().map(|(_, p)| p).collect();
-            let mut merchant_refs: Vec<&mut MerchantAgent> =
-                extracted_merchants.iter_mut().map(|(_, m)| m).collect();
-
-            // Run the settlement tick
-            let _result = run_settlement_tick(
-                settlement_id,
-                &mut pop_refs,
-                &mut merchant_refs,
-                good_profiles,
-                needs,
-                &mut settlement_prices,
-            );
-
-            // Put pops and merchants back
-            for (id, pop) in extracted_pops {
-                self.pops.insert(id, pop);
-            }
-            for (id, merchant) in extracted_merchants {
-                self.merchants.insert(id, merchant);
-            }
-
-            // Merge settlement prices back into world price_ema
-            for (good, price) in settlement_prices {
-                self.price_ema.insert((settlement_id, good), price);
-            }
-        }
-
-        // === 5. MORTALITY PHASE ===
-        self.run_mortality_phase();
-    }
 
     /// Run mortality checks for all pops based on their food satisfaction.
     /// Pops may die (removed) or grow (spawn new pop).

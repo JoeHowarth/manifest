@@ -272,6 +272,7 @@ fn compute_relaxation(
 
 // === MAIN ITERATED AUCTION ===
 
+#[derive(Debug, Clone)]
 pub struct MultiMarketResult {
     pub clearing_prices: HashMap<GoodId, Price>,
     pub fills: Vec<Fill>,
