@@ -70,6 +70,8 @@
 pub mod agents;
 pub mod consumption;
 pub mod geography;
+#[cfg(feature = "instrument")]
+pub mod instrument;
 pub mod labor;
 pub mod market;
 pub mod mortality;

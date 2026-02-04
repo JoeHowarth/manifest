@@ -147,7 +147,9 @@ Update Price and Income EMA
 /// Run a market tick for a single settlement.
 /// Pops at this settlement participate in consumption and trading.
 /// Merchants with presence at this settlement participate in trading.
+#[allow(unused_variables)]
 pub fn run_settlement_tick(
+    tick: u64,
     settlement: SettlementId,
     pops: &mut [&mut Pop],
     merchants: &mut [&mut MerchantAgent],
@@ -173,8 +175,26 @@ pub fn run_settlement_tick(
         );
 
         // Subtract actual consumption from stocks
-        for (good, qty) in result.actual {
-            *pop.stocks.entry(good).or_insert(0.0) -= qty;
+        for (good, qty) in &result.actual {
+            let stock_before = pop.stocks.get(good).copied().unwrap_or(0.0);
+            *pop.stocks.entry(*good).or_insert(0.0) -= qty;
+            let stock_after = pop.stocks.get(good).copied().unwrap_or(0.0);
+
+            #[cfg(feature = "instrument")]
+            {
+                let desired = result.desired.get(good).copied().unwrap_or(0.0);
+                tracing::info!(
+                    target: "consumption",
+                    tick = tick,
+                    pop_id = pop.id.0,
+                    good_id = *good,
+                    desired = desired,
+                    actual = *qty,
+                    stock_before = stock_before,
+                    stock_after = stock_after,
+                );
+            }
+            let _ = (stock_before, stock_after); // Suppress unused warnings
         }
 
         // Blend desired into EMA
@@ -193,6 +213,26 @@ pub fn run_settlement_tick(
         for o in &mut orders {
             o.id = next_order_id;
             next_order_id += 1;
+
+            #[cfg(feature = "instrument")]
+            {
+                let side_str = match o.side {
+                    market::Side::Buy => "buy",
+                    market::Side::Sell => "sell",
+                };
+                tracing::info!(
+                    target: "order",
+                    tick = tick,
+                    settlement_id = settlement.0,
+                    order_id = o.id,
+                    agent_id = o.agent_id,
+                    agent_type = "pop",
+                    good_id = o.good,
+                    side = side_str,
+                    quantity = o.quantity,
+                    limit_price = o.limit_price,
+                );
+            }
         }
         all_orders.extend(orders);
     }
@@ -202,6 +242,26 @@ pub fn run_settlement_tick(
         for o in &mut orders {
             o.id = next_order_id;
             next_order_id += 1;
+
+            #[cfg(feature = "instrument")]
+            {
+                let side_str = match o.side {
+                    market::Side::Buy => "buy",
+                    market::Side::Sell => "sell",
+                };
+                tracing::info!(
+                    target: "order",
+                    tick = tick,
+                    settlement_id = settlement.0,
+                    order_id = o.id,
+                    agent_id = o.agent_id,
+                    agent_type = "merchant",
+                    good_id = o.good,
+                    side = side_str,
+                    quantity = o.quantity,
+                    limit_price = o.limit_price,
+                );
+            }
         }
         all_orders.extend(orders);
     }
@@ -227,11 +287,36 @@ pub fn run_settlement_tick(
 
     // 5. APPLY FILLS
     for fill in &result.fills {
-        if let Some(pop) = pops.iter_mut().find(|p| p.id.0 == fill.agent_id) {
+        let is_pop = if let Some(pop) = pops.iter_mut().find(|p| p.id.0 == fill.agent_id) {
             market::apply_fill(pop, fill);
+            true
         } else if let Some(merchant) = merchants.iter_mut().find(|m| m.id.0 == fill.agent_id) {
             market::apply_fill_merchant(merchant, settlement, fill);
+            false
+        } else {
+            false
+        };
+
+        #[cfg(feature = "instrument")]
+        {
+            let side_str = match fill.side {
+                market::Side::Buy => "buy",
+                market::Side::Sell => "sell",
+            };
+            let agent_type = if is_pop { "pop" } else { "merchant" };
+            tracing::info!(
+                target: "fill",
+                tick = tick,
+                settlement_id = settlement.0,
+                agent_id = fill.agent_id,
+                agent_type = agent_type,
+                good_id = fill.good,
+                side = side_str,
+                quantity = fill.quantity,
+                price = fill.price,
+            );
         }
+        let _ = is_pop; // Suppress unused warning when feature disabled
     }
 
     // 6. UPDATE PRICE EMA
@@ -263,6 +348,7 @@ pub fn run_market_tick(
     let mut merchant_refs: Vec<&mut MerchantAgent> = merchants.iter_mut().collect();
 
     run_settlement_tick(
+        0, // Legacy API doesn't track tick
         dummy_settlement,
         &mut pop_refs,
         &mut merchant_refs,

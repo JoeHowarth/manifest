@@ -133,6 +133,7 @@ impl World {
 
             // Run the settlement tick
             let _result = run_settlement_tick(
+                self.tick,
                 settlement_id,
                 &mut pop_refs,
                 &mut merchant_refs,
@@ -481,6 +482,19 @@ impl World {
                             skill: skill.id,
                             max_wage: actual_bid,
                         });
+
+                        #[cfg(feature = "instrument")]
+                        tracing::info!(
+                            target: "labor_bid",
+                            tick = self.tick,
+                            bid_id = next_bid_id,
+                            facility_id = facility.id.0,
+                            skill_id = skill.id.0,
+                            max_wage = actual_bid,
+                            mvp = mvp,
+                            adaptive_bid = adaptive_bid,
+                        );
+
                         next_bid_id += 1;
                     }
                 }
@@ -492,6 +506,19 @@ impl World {
         let mut next_ask_id = 0u64;
         for pop in self.pops.values() {
             let mut pop_asks = generate_pop_asks(pop, &mut next_ask_id);
+
+            #[cfg(feature = "instrument")]
+            for ask in &pop_asks {
+                tracing::info!(
+                    target: "labor_ask",
+                    tick = self.tick,
+                    ask_id = ask.id,
+                    pop_id = ask.worker_id,
+                    skill_id = ask.skill.0,
+                    min_wage = ask.min_wage,
+                );
+            }
+
             asks.append(&mut pop_asks);
         }
 
@@ -574,6 +601,18 @@ impl World {
                     profitable_unfilled,
                     marginal_profitable_mvp,
                 );
+
+                #[cfg(feature = "instrument")]
+                tracing::info!(
+                    target: "skill_outcome",
+                    tick = self.tick,
+                    facility_id = facility_id.0,
+                    skill_id = skill_id.0,
+                    wanted = *wanted,
+                    filled = filled,
+                    profitable_unfilled = profitable_unfilled,
+                    marginal_mvp = marginal_profitable_mvp.unwrap_or(0.0),
+                );
             }
         }
 
@@ -601,6 +640,16 @@ impl World {
         for assignment in &result.assignments {
             let pop_id = PopId::new(assignment.worker_id);
 
+            #[cfg(feature = "instrument")]
+            tracing::info!(
+                target: "assignment",
+                tick = self.tick,
+                pop_id = assignment.worker_id,
+                facility_id = assignment.facility_id.0,
+                skill_id = assignment.skill.0,
+                wage = assignment.wage,
+            );
+
             if let Some(pop) = self.pops.get_mut(&pop_id) {
                 pop.employed_at = Some(assignment.facility_id);
 
@@ -625,15 +674,6 @@ impl World {
             if pop.employed_at.is_none() {
                 pop.record_income(0.0);
             }
-        }
-
-        // Debug: print facility workers after assignment
-        #[cfg(debug_assertions)]
-        for facility in self.facilities.values() {
-            // eprintln!(
-            //     "[Labor] Facility {:?} workers after assignment: {:?}",
-            //     facility.id, facility.workers
-            // );
         }
     }
 
@@ -693,10 +733,56 @@ impl World {
                 .get_mut(&settlement_id)
                 .unwrap();
 
-            let _result = execute_production(&allocation, recipes, stockpile, quality_multiplier);
+            let result = execute_production(&allocation, recipes, stockpile, quality_multiplier);
+
+            #[cfg(feature = "instrument")]
+            {
+                // Log each recipe run
+                for (recipe_id, runs) in &allocation.runs {
+                    if *runs > 0 {
+                        tracing::info!(
+                            target: "production",
+                            tick = self.tick,
+                            facility_id = facility_id.0,
+                            settlement_id = settlement_id.0,
+                            recipe_id = recipe_id.0,
+                            runs = *runs,
+                            quality_multiplier = quality_multiplier,
+                        );
+                    }
+                }
+
+                // Log inputs consumed
+                for (good_id, qty) in &result.inputs_consumed {
+                    if *qty > 0.0 {
+                        tracing::info!(
+                            target: "production_io",
+                            tick = self.tick,
+                            facility_id = facility_id.0,
+                            good_id = *good_id,
+                            direction = "input",
+                            quantity = *qty,
+                        );
+                    }
+                }
+
+                // Log outputs produced
+                for (good_id, qty) in &result.outputs_produced {
+                    if *qty > 0.0 {
+                        tracing::info!(
+                            target: "production_io",
+                            tick = self.tick,
+                            facility_id = facility_id.0,
+                            good_id = *good_id,
+                            direction = "output",
+                            quantity = *qty,
+                        );
+                    }
+                }
+            }
+            let _ = result; // Suppress unused warning when feature disabled
         }
     }
-
 
     /// Run mortality checks for all pops based on their food satisfaction.
     /// Pops may die (removed) or grow (spawn new pop).
@@ -715,21 +801,45 @@ impl World {
         let mut rng = rand::rng();
 
         // Collect pop IDs and their outcomes
-        let outcomes: Vec<(PopId, SettlementId, MortalityOutcome)> = self
+        let outcomes: Vec<(PopId, SettlementId, MortalityOutcome, f64)> = self
             .pops
             .iter()
             .map(|(id, pop)| {
                 let food_satisfaction = pop.need_satisfaction.get("food").copied().unwrap_or(0.0);
                 let outcome = check_mortality(&mut rng, food_satisfaction);
-                (*id, pop.home_settlement, outcome)
+                (*id, pop.home_settlement, outcome, food_satisfaction)
             })
             .collect();
+
+        #[cfg(feature = "instrument")]
+        {
+            let tick = self.tick;
+            for (pop_id, settlement_id, outcome, food_satisfaction) in &outcomes {
+                let outcome_str = match outcome {
+                    MortalityOutcome::Dies => "dies",
+                    MortalityOutcome::Grows => "grows",
+                    MortalityOutcome::Survives => "survives",
+                };
+                let death_prob = crate::mortality::death_probability(*food_satisfaction);
+                let growth_prob = crate::mortality::growth_probability(*food_satisfaction);
+                tracing::info!(
+                    target: "mortality",
+                    tick = tick,
+                    pop_id = pop_id.0,
+                    settlement_id = settlement_id.0,
+                    food_satisfaction = *food_satisfaction,
+                    death_prob = death_prob,
+                    growth_prob = growth_prob,
+                    outcome = outcome_str,
+                );
+            }
+        }
 
         // Process outcomes
         let mut new_pops: Vec<(SettlementId, Pop)> = Vec::new();
         let mut dead_pop_ids: Vec<PopId> = Vec::new();
 
-        for (pop_id, settlement_id, outcome) in outcomes {
+        for (pop_id, settlement_id, outcome, _food_satisfaction) in outcomes {
             match outcome {
                 MortalityOutcome::Dies => {
                     dead_pop_ids.push(pop_id);
