@@ -936,6 +936,12 @@ fn multi_pop_basic_convergence() {
 /// Test stability with various initial conditions
 #[test]
 fn multi_pop_sweep_initial_conditions() {
+    use sim_core::instrument;
+
+    // Install tracing subscriber to collect data
+    instrument::clear();
+    instrument::install_subscriber();
+
     println!("\n=== Multi-Pop Initial Conditions Sweep ===\n");
 
     let scenarios = [
@@ -988,6 +994,16 @@ fn multi_pop_sweep_initial_conditions() {
     if !failures.is_empty() {
         println!("\nNote: Some scenarios had significant population loss.");
         println!("This may be expected for 'worst case' initial conditions.");
+    }
+
+    // Drain and convert to polars DataFrames
+    let dfs = instrument::drain_to_dataframes();
+    println!("\n=== Instrumentation Data (Polars DataFrames) ===\n");
+    println!("Tables recorded: {:?}", dfs.keys().collect::<Vec<_>>());
+
+    for (name, df) in &dfs {
+        println!("\n--- {} ---", name);
+        println!("{}", df);
     }
 }
 

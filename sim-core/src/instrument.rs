@@ -229,6 +229,48 @@ pub fn clear() {
     RECORDER.with(|r| *r.borrow_mut() = Recorder::default());
 }
 
+// === Polars Integration ===
+
+use polars::prelude::*;
+
+impl DynamicTable {
+    /// Convert this table to a polars DataFrame.
+    pub fn to_dataframe(&self) -> PolarsResult<DataFrame> {
+        let mut columns: Vec<Column> = Vec::new();
+
+        for (name, col) in &self.columns {
+            let series = match col {
+                TypedColumn::U64(v) => Column::new(name.into(), v),
+                TypedColumn::I64(v) => Column::new(name.into(), v),
+                TypedColumn::F64(v) => Column::new(name.into(), v),
+                TypedColumn::Bool(v) => Column::new(name.into(), v),
+                TypedColumn::Str(v) => Column::new(name.into(), v),
+            };
+            columns.push(series);
+        }
+
+        DataFrame::new(columns)
+    }
+}
+
+impl Recorder {
+    /// Convert all tables to polars DataFrames.
+    pub fn to_dataframes(&self) -> HashMap<String, DataFrame> {
+        self.tables
+            .iter()
+            .filter_map(|(name, table)| {
+                table.to_dataframe().ok().map(|df| (name.clone(), df))
+            })
+            .collect()
+    }
+}
+
+/// Drain all recorded data and convert to polars DataFrames.
+/// Returns a HashMap of table name -> DataFrame.
+pub fn drain_to_dataframes() -> HashMap<String, DataFrame> {
+    drain().to_dataframes()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
