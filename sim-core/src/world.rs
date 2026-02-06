@@ -859,12 +859,18 @@ impl World {
                     dead_pop_ids.push(pop_id);
                 }
                 MortalityOutcome::Grows => {
-                    // Clone the pop to create a new one
-                    if let Some(parent) = self.pops.get(&pop_id) {
+                    // Clone the pop to create a new one.
+                    // Child startup funds come from the parent so growth doesn't mint currency.
+                    if let Some(parent) = self.pops.get_mut(&pop_id) {
                         let mut child = parent.clone();
-                        // Reset child's stocks to modest starting amount
+                        // Reset child's stocks to modest starting amount.
                         child.stocks.clear();
-                        child.currency = parent.income_ema * 5.0; // Start with some savings
+
+                        // Split parent savings with the child.
+                        let child_currency = parent.currency * 0.5;
+                        parent.currency -= child_currency;
+                        child.currency = child_currency;
+
                         new_pops.push((settlement_id, child));
                     }
                 }

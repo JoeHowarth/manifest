@@ -276,11 +276,19 @@ pub fn run_settlement_tick(
         .collect();
 
     // 4. GATHER SELLER INVENTORIES
-    // Merchants can only sell what they actually have in stock
+    // Sellers can only sell what they actually have in stock.
+    // Include both pops and merchants so per-agent sell ladders cannot overfill.
     let good_ids: Vec<_> = good_profiles.iter().map(|p| p.good).collect();
-    let seller_inventories: HashMap<AgentId, HashMap<GoodId, f64>> = merchants
+    let seller_inventories: HashMap<AgentId, HashMap<GoodId, f64>> = pops
         .iter()
-        .map(|m| {
+        .map(|p| {
+            let inv: HashMap<GoodId, f64> = good_ids
+                .iter()
+                .map(|&g| (g, p.stocks.get(&g).copied().unwrap_or(0.0)))
+                .collect();
+            (p.id.0, inv)
+        })
+        .chain(merchants.iter().map(|m| {
             let inv: HashMap<GoodId, f64> = m
                 .stockpiles
                 .get(&settlement)
@@ -289,7 +297,7 @@ pub fn run_settlement_tick(
                 })
                 .unwrap_or_default();
             (m.id.0, inv)
-        })
+        }))
         .collect();
 
     // 5. MARKET CLEARING

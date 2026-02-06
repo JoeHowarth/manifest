@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use sim_core::{
     GoodId, GoodProfile, Need, NeedContribution, Pop, PopId, Price, Recipe, SettlementId,
-    UtilityCurve, World, generate_demand_curve_orders, labor::SkillId,
-    market::{PriceBias, Side, clear_multi_market},
+    UtilityCurve, World, labor::SkillId,
     production::{FacilityType, RecipeId},
+    run_settlement_tick,
 };
 
 const GRAIN: GoodId = 1;
@@ -60,6 +60,7 @@ fn invariant_currency_conserved_under_population_growth() {
 
 #[test]
 fn invariant_pop_cannot_sell_more_than_inventory() {
+    let settlement = SettlementId::new(0);
     let mut price_ema: HashMap<GoodId, Price> = HashMap::new();
     price_ema.insert(GRAIN, 1.0);
 
@@ -67,48 +68,37 @@ fn invariant_pop_cannot_sell_more_than_inventory() {
         good: GRAIN,
         contributions: vec![],
     }];
+    let needs: HashMap<String, Need> = HashMap::new();
 
-    let mut seller = Pop::new(PopId::new(1), SettlementId::new(0));
+    let mut seller = Pop::new(PopId::new(1), settlement);
     seller.currency = 0.0;
     seller.stocks.insert(GRAIN, 2.0); // tiny inventory
     seller.desired_consumption_ema.insert(GRAIN, 0.001); // target=0.005 => near-full stock is "excess"
 
-    let mut buyer = Pop::new(PopId::new(2), SettlementId::new(0));
+    let mut buyer = Pop::new(PopId::new(2), settlement);
     buyer.currency = 10_000.0;
     buyer.income_ema = 10_000.0;
     buyer.stocks.insert(GRAIN, 0.0);
     buyer.desired_consumption_ema.insert(GRAIN, 10.0); // very strong demand
 
-    let mut orders = Vec::new();
-    orders.extend(generate_demand_curve_orders(
-        &seller,
-        &good_profiles,
-        &price_ema,
-    ));
-    orders.extend(generate_demand_curve_orders(
-        &buyer,
-        &good_profiles,
-        &price_ema,
-    ));
-    for (id, order) in orders.iter_mut().enumerate() {
-        order.id = id as u64;
-    }
-
-    let budgets = HashMap::from([(seller.id.0, seller.currency), (buyer.id.0, buyer.currency)]);
     let initial_stock = seller.stocks.get(&GRAIN).copied().unwrap_or(0.0);
 
-    let result = clear_multi_market(&[GRAIN], orders, &budgets, None, 20, PriceBias::FavorSellers);
+    let mut pops: Vec<&mut Pop> = vec![&mut seller, &mut buyer];
+    let mut merchants = Vec::new();
+    let _ = run_settlement_tick(
+        1,
+        settlement,
+        &mut pops,
+        &mut merchants,
+        &good_profiles,
+        &needs,
+        &mut price_ema,
+    );
 
-    let sold: f64 = result
-        .fills
-        .iter()
-        .filter(|f| f.agent_id == seller.id.0 && matches!(f.side, Side::Sell))
-        .map(|f| f.quantity)
-        .sum();
-    let remaining = initial_stock - sold;
+    let remaining = seller.stocks.get(&GRAIN).copied().unwrap_or(0.0);
     assert!(
         remaining >= -1e-6,
-        "Pop seller oversold inventory: initial={initial_stock:.4}, sold={sold:.4}, remaining={remaining:.4}"
+        "Pop seller oversold inventory in settlement tick: initial={initial_stock:.4}, remaining={remaining:.4}"
     );
 }
 
