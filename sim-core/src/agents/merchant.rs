@@ -123,16 +123,6 @@ impl MerchantAgent {
             let target = TARGET_STOCK_BUFFER * production_rate;
             let norm_c = qty / target;
 
-            // Debug: trace merchant state
-            eprintln!(
-                "[merchant] good={} stock={:.1} prod_ema={:.1} target={:.1} norm_c={:.2}",
-                good,
-                qty,
-                self.expected_production(settlement, good),
-                target,
-                norm_c
-            );
-
             // Sweep price points and generate supply curve
             for i in 0..PRICE_SWEEP_POINTS {
                 let norm_p = PRICE_SWEEP_MIN

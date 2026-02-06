@@ -142,10 +142,6 @@ impl World {
                 &mut settlement_prices,
             );
 
-            // Sum of fills per good
-            let sum_fills = _result.fills.iter().fold(0.0, |acc, f| acc + f.quantity);
-            dbg!(sum_fills);
-
             // Put pops and merchants back
             for (id, pop) in extracted_pops {
                 self.pops.insert(id, pop);
