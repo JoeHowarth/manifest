@@ -271,6 +271,76 @@ pub fn drain_to_dataframes() -> HashMap<String, DataFrame> {
     drain().to_dataframes()
 }
 
+/// Save all DataFrames as parquet files in the given directory.
+/// Each table becomes `{dir}/{name}.parquet`.
+pub fn save_parquet(dfs: &mut HashMap<String, DataFrame>, dir: &std::path::Path) -> PolarsResult<()> {
+    std::fs::create_dir_all(dir).map_err(|e| PolarsError::IO {
+        error: e.into(),
+        msg: None,
+    })?;
+    for (name, df) in dfs.iter_mut() {
+        let path = dir.join(format!("{}.parquet", name));
+        let file = std::fs::File::create(&path).map_err(|e| PolarsError::IO {
+            error: e.into(),
+            msg: None,
+        })?;
+        ParquetWriter::new(file).finish(df)?;
+    }
+    Ok(())
+}
+
+/// RAII guard that clears instrumentation data on creation and saves to parquet on drop.
+///
+/// Call `.get()` after the simulation to drain and access the DataFrames for analysis.
+/// On drop, the cached DataFrames are written to parquet.
+///
+/// ```ignore
+/// let mut recorder = instrument::ScopedRecorder::new("output/my_test");
+/// // ... run simulation ...
+/// let dfs = recorder.get();
+/// analyze(&dfs);
+/// // recorder drops here, writes parquet files
+/// ```
+pub struct ScopedRecorder {
+    output_dir: std::path::PathBuf,
+    dfs: Option<HashMap<String, DataFrame>>,
+}
+
+impl ScopedRecorder {
+    pub fn new(output_dir: impl Into<std::path::PathBuf>) -> Self {
+        clear();
+        install_subscriber();
+        Self {
+            output_dir: output_dir.into(),
+            dfs: None,
+        }
+    }
+
+    /// Drain recorded data and return a reference to the DataFrames.
+    /// First call drains from the thread-local recorder; subsequent calls return the cached data.
+    pub fn get(&mut self) -> &HashMap<String, DataFrame> {
+        self.dfs.get_or_insert_with(drain_to_dataframes)
+    }
+}
+
+impl Drop for ScopedRecorder {
+    fn drop(&mut self) {
+        let mut dfs = self.dfs.take().unwrap_or_else(drain_to_dataframes);
+        if dfs.is_empty() {
+            return;
+        }
+        if let Err(e) = save_parquet(&mut dfs, &self.output_dir) {
+            eprintln!("ScopedRecorder: failed to write parquet: {}", e);
+        } else {
+            eprintln!(
+                "ScopedRecorder: wrote {} tables to {}",
+                dfs.len(),
+                self.output_dir.display()
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
