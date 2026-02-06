@@ -19,10 +19,20 @@ pub struct MarketClearResult {
     pub fills: Vec<Fill>,
 }
 
-/// Clear one good's market via call auction
+/// Clear one good's market via call auction.
+///
+/// If `buyer_budgets` is provided, each buyer's effective demand is capped by what they
+/// can afford at each price point: `min(order.quantity, budget / price)`.
+///
+/// If `seller_inventories` is provided, each seller's effective supply is capped by
+/// their actual inventory of the good being traded.
+///
+/// This ensures the volume-maximizing price accounts for both budget and inventory constraints.
 pub fn clear_single_market(
     good: GoodId,
     orders: &[Order], // filtered to this good
+    buyer_budgets: Option<&HashMap<AgentId, f64>>,
+    seller_inventories: Option<&HashMap<AgentId, f64>>,
     bias: PriceBias,
 ) -> MarketClearResult {
     let mut buys: Vec<_> = orders
@@ -63,18 +73,50 @@ pub fn clear_single_market(
     price_points.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
 
     for price in price_points {
-        // Demand at this price: all buys with limit >= price
-        let demand: f64 = buys
-            .iter()
-            .filter(|o| o.limit_price >= price)
-            .map(|o| o.quantity)
-            .sum();
-        // Supply at this price: all sells with limit <= price
-        let supply: f64 = sells
-            .iter()
-            .filter(|o| o.limit_price <= price)
-            .map(|o| o.quantity)
-            .sum();
+        // Demand at this price: aggregate by agent first, then cap each agent's total
+        // (an agent with multiple orders can't exceed their budget)
+        let demand: f64 = if let Some(budgets) = buyer_budgets {
+            // Sum each agent's total quantity at this price
+            let mut agent_qty: HashMap<AgentId, f64> = HashMap::new();
+            for order in buys.iter().filter(|o| o.limit_price >= price) {
+                *agent_qty.entry(order.agent_id).or_insert(0.0) += order.quantity;
+            }
+            // Cap each agent's total by their budget
+            agent_qty
+                .iter()
+                .map(|(agent_id, &total_qty)| {
+                    let budget = budgets.get(agent_id).copied().unwrap_or(f64::MAX);
+                    total_qty.min(budget / price)
+                })
+                .sum()
+        } else {
+            buys.iter()
+                .filter(|o| o.limit_price >= price)
+                .map(|o| o.quantity)
+                .sum()
+        };
+        // Supply at this price: aggregate by agent, cap by inventory
+        // (a seller can't sell more than they have)
+        let supply: f64 = if let Some(inventories) = seller_inventories {
+            let mut agent_qty: HashMap<AgentId, f64> = HashMap::new();
+            for order in sells.iter().filter(|o| o.limit_price <= price) {
+                *agent_qty.entry(order.agent_id).or_insert(0.0) += order.quantity;
+            }
+            // Cap each agent's total by their inventory
+            agent_qty
+                .iter()
+                .map(|(agent_id, &total_qty)| {
+                    let inventory = inventories.get(agent_id).copied().unwrap_or(0.0);
+                    total_qty.min(inventory)
+                })
+                .sum()
+        } else {
+            sells
+                .iter()
+                .filter(|o| o.limit_price <= price)
+                .map(|o| o.quantity)
+                .sum()
+        };
 
         let volume = demand.min(supply);
         if volume > max_volume {
@@ -90,13 +132,49 @@ pub fn clear_single_market(
         };
     };
 
+    // Compute each buyer's max fill at the clearing price (budget-capped total)
+    let mut agent_max_fill: HashMap<AgentId, f64> = HashMap::new();
+    for order in buys.iter().filter(|o| o.limit_price >= price) {
+        *agent_max_fill.entry(order.agent_id).or_insert(0.0) += order.quantity;
+    }
+    if let Some(budgets) = buyer_budgets {
+        for (agent_id, qty) in agent_max_fill.iter_mut() {
+            let budget = budgets.get(agent_id).copied().unwrap_or(f64::MAX);
+            *qty = (*qty).min(budget / price);
+        }
+    }
+
+    // Compute each seller's max fill at the clearing price (inventory-capped total)
+    let mut seller_max_fill: HashMap<AgentId, f64> = HashMap::new();
+    for order in sells.iter().filter(|o| o.limit_price <= price) {
+        *seller_max_fill.entry(order.agent_id).or_insert(0.0) += order.quantity;
+    }
+    if let Some(inventories) = seller_inventories {
+        for (agent_id, qty) in seller_max_fill.iter_mut() {
+            let inventory = inventories.get(agent_id).copied().unwrap_or(0.0);
+            *qty = (*qty).min(inventory);
+        }
+    }
+
+    // Total budget-constrained demand
+    let budget_constrained_demand: f64 = agent_max_fill.values().sum();
+
+    // Total inventory-constrained supply
+    let inventory_constrained_supply: f64 = seller_max_fill.values().sum();
+
+    // The actual volume is min of constrained demand and constrained supply
+    let actual_volume = budget_constrained_demand.min(inventory_constrained_supply);
+
     // Generate fills at clearing price
     let mut fills = Vec::new();
-    let mut remaining_demand = max_volume;
-    let mut remaining_supply = max_volume;
+    let mut remaining_demand = actual_volume;
+    let mut remaining_supply = actual_volume;
+
+    // Track how much each agent has been filled (for budget enforcement)
+    let mut agent_filled: HashMap<AgentId, f64> = HashMap::new();
 
     // Fill buys with proportional allocation at same price levels
-    // Group buys by price level (descending)
+    // Process from highest limit price to lowest (most aggressive bidders first)
     let mut buy_idx = 0;
     while buy_idx < buys.len() && remaining_demand > 0.0 {
         let current_price = buys[buy_idx].limit_price;
@@ -104,13 +182,22 @@ pub fn clear_single_market(
             break;
         }
 
-        // Collect all buys at this price level
-        let mut price_level_buys: Vec<&Order> = Vec::new();
+        // Collect all buys at this price level, with budget-constrained quantities
+        let mut price_level_buys: Vec<(&Order, f64)> = Vec::new(); // (order, effective_qty)
         let mut price_level_demand = 0.0;
         while buy_idx < buys.len() && (buys[buy_idx].limit_price - current_price).abs() < 1e-9 {
             if buys[buy_idx].limit_price >= price {
-                price_level_buys.push(buys[buy_idx]);
-                price_level_demand += buys[buy_idx].quantity;
+                let order = buys[buy_idx];
+                // Effective qty is limited by agent's remaining budget capacity
+                let agent_cap = agent_max_fill.get(&order.agent_id).copied().unwrap_or(0.0);
+                let already_filled = agent_filled.get(&order.agent_id).copied().unwrap_or(0.0);
+                let remaining_cap = (agent_cap - already_filled).max(0.0);
+                let effective_qty = order.quantity.min(remaining_cap);
+
+                if effective_qty > 0.0 {
+                    price_level_buys.push((order, effective_qty));
+                    price_level_demand += effective_qty;
+                }
             }
             buy_idx += 1;
         }
@@ -126,10 +213,11 @@ pub fn clear_single_market(
             1.0
         };
 
-        for buy in price_level_buys {
-            let fill_qty = buy.quantity * fill_ratio;
+        for (buy, effective_qty) in price_level_buys {
+            let fill_qty = effective_qty * fill_ratio;
             if fill_qty > 0.0 {
                 remaining_demand -= fill_qty;
+                *agent_filled.entry(buy.agent_id).or_insert(0.0) += fill_qty;
                 fills.push(Fill {
                     order_id: buy.id,
                     agent_id: buy.agent_id,
@@ -142,7 +230,11 @@ pub fn clear_single_market(
         }
     }
 
+    // Track how much each seller has filled (for inventory enforcement)
+    let mut seller_filled: HashMap<AgentId, f64> = HashMap::new();
+
     // Fill sells with proportional allocation at same price levels
+    // Process from lowest limit price to highest (most aggressive asks first)
     let mut sell_idx = 0;
     while sell_idx < sells.len() && remaining_supply > 0.0 {
         let current_price = sells[sell_idx].limit_price;
@@ -150,13 +242,22 @@ pub fn clear_single_market(
             break;
         }
 
-        // Collect all sells at this price level
-        let mut price_level_sells: Vec<&Order> = Vec::new();
+        // Collect all sells at this price level, with inventory-constrained quantities
+        let mut price_level_sells: Vec<(&Order, f64)> = Vec::new(); // (order, effective_qty)
         let mut price_level_supply = 0.0;
         while sell_idx < sells.len() && (sells[sell_idx].limit_price - current_price).abs() < 1e-9 {
             if sells[sell_idx].limit_price <= price {
-                price_level_sells.push(sells[sell_idx]);
-                price_level_supply += sells[sell_idx].quantity;
+                let order = sells[sell_idx];
+                // Effective qty is limited by seller's remaining inventory capacity
+                let seller_cap = seller_max_fill.get(&order.agent_id).copied().unwrap_or(0.0);
+                let already_filled = seller_filled.get(&order.agent_id).copied().unwrap_or(0.0);
+                let remaining_cap = (seller_cap - already_filled).max(0.0);
+                let effective_qty = order.quantity.min(remaining_cap);
+
+                if effective_qty > 0.0 {
+                    price_level_sells.push((order, effective_qty));
+                    price_level_supply += effective_qty;
+                }
             }
             sell_idx += 1;
         }
@@ -172,10 +273,11 @@ pub fn clear_single_market(
             1.0
         };
 
-        for sell in price_level_sells {
-            let fill_qty = sell.quantity * fill_ratio;
+        for (sell, effective_qty) in price_level_sells {
+            let fill_qty = effective_qty * fill_ratio;
             if fill_qty > 0.0 {
                 remaining_supply -= fill_qty;
+                *seller_filled.entry(sell.agent_id).or_insert(0.0) += fill_qty;
                 fills.push(Fill {
                     order_id: sell.id,
                     agent_id: sell.agent_id,
@@ -283,6 +385,7 @@ pub fn clear_multi_market(
     goods: &[GoodId],
     mut orders: Vec<Order>,
     initial_budgets: &HashMap<AgentId, f64>,
+    seller_inventories: Option<&HashMap<AgentId, HashMap<GoodId, f64>>>,
     max_iterations: u32,
     bias: PriceBias,
 ) -> MultiMarketResult {
@@ -298,7 +401,23 @@ pub fn clear_multi_market(
         for good in goods {
             let good_orders: Vec<_> = orders.iter().filter(|o| o.good == *good).cloned().collect();
 
-            let result = clear_single_market(*good, &good_orders, bias);
+            // Extract per-agent inventory for this specific good
+            let good_inventories: Option<HashMap<AgentId, f64>> = seller_inventories.map(|invs| {
+                invs.iter()
+                    .map(|(&agent_id, goods_map)| {
+                        (agent_id, goods_map.get(good).copied().unwrap_or(0.0))
+                    })
+                    .collect()
+            });
+
+            // Pass budgets and inventories to clear_single_market for constraint-aware price discovery
+            let result = clear_single_market(
+                *good,
+                &good_orders,
+                Some(initial_budgets),
+                good_inventories.as_ref(),
+                bias,
+            );
 
             if let Some(price) = result.clearing_price {
                 clearing_prices.insert(*good, price);
@@ -445,7 +564,7 @@ mod tests {
             orders.push(make_sell(i, i as u32, 1.0, 5.0));
         }
 
-        let result = clear_single_market(1, &orders, PriceBias::FavorSellers);
+        let result = clear_single_market(1, &orders, None, None, PriceBias::FavorSellers);
 
         assert!(result.clearing_price.is_some());
         let price = result.clearing_price.unwrap();
@@ -495,6 +614,278 @@ mod tests {
             (total_fills - 10.0).abs() < 0.01,
             "Total fills should be 10, got {}",
             total_fills
+        );
+    }
+
+    #[test]
+    fn budget_constrains_quantity_not_price() {
+        // Buyer wants 10 units at price 1.0, but only has budget of 5.0
+        // Seller offers 100 units at price 1.0
+        // Expected: Clears at price 1.0 (not higher), buyer gets 5 units (not 10)
+
+        let orders = vec![
+            make_buy(1, 1, 10.0, 1.0), // agent 1 wants 10 @ 1.0
+            make_sell(2, 2, 100.0, 1.0), // agent 2 offers 100 @ 1.0
+        ];
+
+        let mut budgets = HashMap::new();
+        budgets.insert(1, 5.0); // agent 1 can only spend 5.0
+        budgets.insert(2, 1000.0); // seller has plenty
+
+        let result = clear_single_market(1, &orders, Some(&budgets), None, PriceBias::FavorSellers);
+
+        assert!(result.clearing_price.is_some());
+        let price = result.clearing_price.unwrap();
+        assert!(
+            (price - 1.0).abs() < 0.01,
+            "clearing price should be 1.0, got {}",
+            price
+        );
+
+        // Buyer should get budget/price = 5.0/1.0 = 5 units
+        let buyer_fills: f64 = result
+            .fills
+            .iter()
+            .filter(|f| f.agent_id == 1 && matches!(f.side, Side::Buy))
+            .map(|f| f.quantity)
+            .sum();
+
+        assert!(
+            (buyer_fills - 5.0).abs() < 0.01,
+            "Buyer should get 5 units (budget/price), got {}",
+            buyer_fills
+        );
+    }
+
+    #[test]
+    fn budget_constraint_finds_lower_clearing_price() {
+        // This tests the death spiral fix scenario:
+        // - Many buyers want goods at various prices (1.2 to 2.8)
+        // - At high prices (2.8), buyers can afford small quantities → low volume
+        // - At low prices (1.2), buyers can afford more → higher volume
+        // Budget-aware clearing should find the lower price that maximizes volume.
+
+        let mut orders = Vec::new();
+
+        // 10 buyers, each with budget 1.0
+        // Each generates orders at prices 1.2, 1.6, 2.0, 2.4, 2.8
+        for buyer_id in 1..=10u32 {
+            orders.push(make_buy(buyer_id as u64 * 10 + 1, buyer_id, 2.0, 1.2)); // want 2 @ 1.2
+            orders.push(make_buy(buyer_id as u64 * 10 + 2, buyer_id, 1.5, 1.6));
+            orders.push(make_buy(buyer_id as u64 * 10 + 3, buyer_id, 1.0, 2.0));
+            orders.push(make_buy(buyer_id as u64 * 10 + 4, buyer_id, 0.5, 2.4));
+            orders.push(make_buy(buyer_id as u64 * 10 + 5, buyer_id, 0.1, 2.8)); // tiny @ 2.8
+        }
+
+        // Seller offers 100 units across price ladder
+        for i in 0..5 {
+            let price = 1.2 + i as f64 * 0.4; // 1.2, 1.6, 2.0, 2.4, 2.8
+            orders.push(make_sell(200 + i, 100, 20.0, price));
+        }
+
+        let mut budgets = HashMap::new();
+        for buyer_id in 1..=10u32 {
+            budgets.insert(buyer_id, 1.0); // each buyer has budget 1.0
+        }
+        budgets.insert(100, 10000.0); // seller
+
+        let result = clear_single_market(1, &orders, Some(&budgets), None, PriceBias::FavorSellers);
+
+        assert!(result.clearing_price.is_some());
+        let price = result.clearing_price.unwrap();
+
+        // At price 1.2: each buyer can afford 1.0/1.2 = 0.83 units → 8.3 total demand
+        // At price 2.8: each buyer can afford 1.0/2.8 = 0.36 units, but order is only 0.1 → 1.0 total
+        // Volume at 1.2 should be higher, so clearing price should be 1.2
+
+        println!("Clearing price: {}", price);
+        println!("Total fills: {:?}", result.fills.len());
+
+        let total_buy_volume: f64 = result
+            .fills
+            .iter()
+            .filter(|f| matches!(f.side, Side::Buy))
+            .map(|f| f.quantity)
+            .sum();
+
+        println!("Total buy volume: {}", total_buy_volume);
+
+        // With budget-aware clearing, we should get more volume at a lower price
+        // The exact price depends on the supply/demand curves, but it should be lower than 2.8
+        assert!(
+            price < 2.0,
+            "Budget-aware clearing should find a lower price (got {})",
+            price
+        );
+        assert!(
+            total_buy_volume > 5.0,
+            "Should clear more than 5 units (got {})",
+            total_buy_volume
+        );
+    }
+
+    #[test]
+    fn multi_order_agent_respects_total_budget() {
+        // Agent 1 has budget 1.0, places orders totaling 3.5 units across 3 price levels
+        // At clearing price 1.0, agent can afford 1.0 units total (not 3.5)
+        // This tests per-AGENT budget cap, not per-ORDER cap
+
+        let orders = vec![
+            make_buy(1, 1, 2.0, 1.0),  // agent 1 wants 2 @ limit 1.0
+            make_buy(2, 1, 1.0, 1.5),  // agent 1 wants 1 @ limit 1.5
+            make_buy(3, 1, 0.5, 2.0),  // agent 1 wants 0.5 @ limit 2.0
+            make_sell(10, 2, 10.0, 1.0), // seller offers 10 @ 1.0
+        ];
+
+        let mut budgets = HashMap::new();
+        budgets.insert(1, 1.0);  // agent 1 has budget 1.0
+        budgets.insert(2, 1000.0);
+
+        let result = clear_single_market(1, &orders, Some(&budgets), None, PriceBias::FavorSellers);
+
+        assert!(result.clearing_price.is_some());
+        let price = result.clearing_price.unwrap();
+
+        // Should clear at 1.0 - all 3 orders qualify (limits >= 1.0), supply is 10
+        // Demand is capped at 1.0 (agent's budget/price), volume = min(1.0, 10) = 1.0
+        assert!(
+            (price - 1.0).abs() < 0.01,
+            "Should clear at 1.0, got {}",
+            price
+        );
+
+        // Agent 1 should get exactly 1.0 units total (budget cap), not 3.5
+        let agent_1_fills: f64 = result
+            .fills
+            .iter()
+            .filter(|f| f.agent_id == 1 && matches!(f.side, Side::Buy))
+            .map(|f| f.quantity)
+            .sum();
+
+        assert!(
+            (agent_1_fills - 1.0).abs() < 0.01,
+            "Agent 1 should get 1.0 units (budget cap), got {}",
+            agent_1_fills
+        );
+
+        // Verify total cost doesn't exceed budget
+        let agent_1_cost: f64 = result
+            .fills
+            .iter()
+            .filter(|f| f.agent_id == 1 && matches!(f.side, Side::Buy))
+            .map(|f| f.quantity * f.price)
+            .sum();
+
+        assert!(
+            agent_1_cost <= 1.0 + 0.01,
+            "Agent 1 cost {} should not exceed budget 1.0",
+            agent_1_cost
+        );
+    }
+
+    #[test]
+    fn inventory_constrains_seller_quantity() {
+        // Seller offers 100 units at price 1.0, but only has 30 in inventory
+        // Buyer wants 50 units at price 1.0, has plenty of budget
+        // Expected: Clears at price 1.0, but seller only sells 30 (inventory cap)
+
+        let orders = vec![
+            make_buy(1, 1, 50.0, 1.0),   // agent 1 wants 50 @ 1.0
+            make_sell(2, 2, 100.0, 1.0), // agent 2 offers 100 @ 1.0
+        ];
+
+        let mut budgets = HashMap::new();
+        budgets.insert(1, 1000.0); // buyer has plenty of budget
+        budgets.insert(2, 1000.0);
+
+        let mut inventories = HashMap::new();
+        inventories.insert(2, 30.0); // seller only has 30 units in stock
+
+        let result = clear_single_market(
+            1,
+            &orders,
+            Some(&budgets),
+            Some(&inventories),
+            PriceBias::FavorSellers,
+        );
+
+        assert!(result.clearing_price.is_some());
+        let price = result.clearing_price.unwrap();
+        assert!(
+            (price - 1.0).abs() < 0.01,
+            "clearing price should be 1.0, got {}",
+            price
+        );
+
+        // Seller should only sell 30 units (inventory cap), not 100
+        let seller_fills: f64 = result
+            .fills
+            .iter()
+            .filter(|f| f.agent_id == 2 && matches!(f.side, Side::Sell))
+            .map(|f| f.quantity)
+            .sum();
+
+        assert!(
+            (seller_fills - 30.0).abs() < 0.01,
+            "Seller should sell 30 units (inventory cap), got {}",
+            seller_fills
+        );
+
+        // Buyer gets same amount
+        let buyer_fills: f64 = result
+            .fills
+            .iter()
+            .filter(|f| f.agent_id == 1 && matches!(f.side, Side::Buy))
+            .map(|f| f.quantity)
+            .sum();
+
+        assert!(
+            (buyer_fills - 30.0).abs() < 0.01,
+            "Buyer should get 30 units (limited by seller inventory), got {}",
+            buyer_fills
+        );
+    }
+
+    #[test]
+    fn multi_order_seller_respects_total_inventory() {
+        // Seller has 50 units inventory, places orders totaling 80 units across 2 price levels
+        // Should only be able to sell 50 total
+
+        let orders = vec![
+            make_buy(1, 1, 100.0, 2.0),  // buyer wants 100 @ up to 2.0
+            make_sell(10, 2, 50.0, 1.0), // seller offers 50 @ 1.0
+            make_sell(11, 2, 30.0, 1.5), // seller offers 30 more @ 1.5 (same seller!)
+        ];
+
+        let mut budgets = HashMap::new();
+        budgets.insert(1, 10000.0);
+        budgets.insert(2, 10000.0);
+
+        let mut inventories = HashMap::new();
+        inventories.insert(2, 50.0); // seller only has 50 total
+
+        let result = clear_single_market(
+            1,
+            &orders,
+            Some(&budgets),
+            Some(&inventories),
+            PriceBias::FavorSellers,
+        );
+
+        assert!(result.clearing_price.is_some());
+
+        // Seller's total fills should be capped at 50 (their inventory)
+        let seller_fills: f64 = result
+            .fills
+            .iter()
+            .filter(|f| f.agent_id == 2 && matches!(f.side, Side::Sell))
+            .map(|f| f.quantity)
+            .sum();
+
+        assert!(
+            (seller_fills - 50.0).abs() < 0.01,
+            "Seller should sell 50 units (inventory cap), got {}",
+            seller_fills
         );
     }
 }

@@ -394,6 +394,18 @@ fn trace_clearing_mechanism() {
     budgets.insert(pop.id.0, pop.income_ema.min(pop.currency));
     budgets.insert(merchant.id.0, merchant.currency);
 
+    // Set up seller inventories
+    let seller_inventories: StdHashMap<u32, StdHashMap<GoodId, f64>> = {
+        let mut inv = StdHashMap::new();
+        let goods_map: StdHashMap<GoodId, f64> = merchant
+            .stockpiles
+            .get(&settlement)
+            .map(|s| [(GRAIN, s.get(GRAIN))].into_iter().collect())
+            .unwrap_or_default();
+        inv.insert(merchant.id.0, goods_map);
+        inv
+    };
+
     println!("\nBudgets:");
     println!(
         "  Pop: {:.1} (income_ema={:.1}, currency={:.1})",
@@ -408,6 +420,7 @@ fn trace_clearing_mechanism() {
         &[GRAIN],
         all_orders.clone(),
         &budgets,
+        Some(&seller_inventories),
         20,
         PriceBias::FavorSellers,
     );
@@ -571,8 +584,26 @@ fn trace_death_spiral_orders() {
     budgets.insert(pop.id.0, pop.income_ema.min(pop.currency));
     budgets.insert(merchant.id.0, merchant.currency);
 
-    let result =
-        market::clear_multi_market(&[GRAIN], all_orders, &budgets, 20, PriceBias::FavorSellers);
+    // Set up seller inventories
+    let seller_inventories: StdHashMap<u32, StdHashMap<GoodId, f64>> = {
+        let mut inv = StdHashMap::new();
+        let goods_map: StdHashMap<GoodId, f64> = merchant
+            .stockpiles
+            .get(&settlement)
+            .map(|s| [(GRAIN, s.get(GRAIN))].into_iter().collect())
+            .unwrap_or_default();
+        inv.insert(merchant.id.0, goods_map);
+        inv
+    };
+
+    let result = market::clear_multi_market(
+        &[GRAIN],
+        all_orders,
+        &budgets,
+        Some(&seller_inventories),
+        20,
+        PriceBias::FavorSellers,
+    );
 
     println!("\nClearing result:");
     println!("  Iterations: {}", result.iterations);

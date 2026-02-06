@@ -275,12 +275,29 @@ pub fn run_settlement_tick(
         .chain(merchants.iter().map(|m| (m.id.0, m.currency)))
         .collect();
 
-    // 4. MARKET CLEARING
+    // 4. GATHER SELLER INVENTORIES
+    // Merchants can only sell what they actually have in stock
     let good_ids: Vec<_> = good_profiles.iter().map(|p| p.good).collect();
+    let seller_inventories: HashMap<AgentId, HashMap<GoodId, f64>> = merchants
+        .iter()
+        .map(|m| {
+            let inv: HashMap<GoodId, f64> = m
+                .stockpiles
+                .get(&settlement)
+                .map(|stockpile| {
+                    good_ids.iter().map(|&g| (g, stockpile.get(g))).collect()
+                })
+                .unwrap_or_default();
+            (m.id.0, inv)
+        })
+        .collect();
+
+    // 5. MARKET CLEARING
     let result = market::clear_multi_market(
         &good_ids,
         all_orders,
         &budgets,
+        Some(&seller_inventories),
         20,
         market::PriceBias::FavorSellers,
     );

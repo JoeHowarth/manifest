@@ -337,7 +337,8 @@ pub fn clear_labor_markets(
             // Clear with worker (seller) bias - wages set by employer's bid
             // This means clearing wage = min(filled bids), so the marginal
             // employer sets the wage. Facilities adjust bids based on fill rate.
-            let result = clear_single_market(skill.0, &orders, PriceBias::FavorSellers);
+            // Labor market: no budget/inventory constraints (handled separately)
+            let result = clear_single_market(skill.0, &orders, None, None, PriceBias::FavorSellers);
 
             let Some(wage) = result.clearing_price else {
                 break;
