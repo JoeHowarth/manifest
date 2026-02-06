@@ -38,6 +38,8 @@ pub struct MerchantAgent {
     pub facility_ids: HashSet<FacilityId>,
     /// Stockpiles at settlements where merchant owns facilities
     pub stockpiles: HashMap<SettlementId, Stockpile>,
+    /// EMA of production rate per good per settlement (for buffer target calculation)
+    pub production_ema: HashMap<SettlementId, HashMap<GoodId, f64>>,
 }
 
 impl MerchantAgent {
@@ -47,6 +49,7 @@ impl MerchantAgent {
             currency: 10000.0,
             facility_ids: HashSet::new(),
             stockpiles: HashMap::new(),
+            production_ema: HashMap::new(),
         }
     }
 
@@ -65,6 +68,28 @@ impl MerchantAgent {
     /// Get or create stockpile at a settlement (caller must verify facility ownership)
     pub fn stockpile_at(&mut self, settlement: SettlementId) -> &mut Stockpile {
         self.stockpiles.entry(settlement).or_default()
+    }
+
+    /// Record production output and update the production EMA.
+    /// Call this when goods are produced at a facility owned by this merchant.
+    pub fn record_production(&mut self, settlement: SettlementId, good: GoodId, quantity: f64) {
+        let ema = self
+            .production_ema
+            .entry(settlement)
+            .or_default()
+            .entry(good)
+            .or_insert(quantity); // Initialize to first observation
+        // Blend new production into EMA (α = 0.3 for responsiveness)
+        *ema = 0.7 * *ema + 0.3 * quantity;
+    }
+
+    /// Get expected production rate for a good at a settlement
+    pub fn expected_production(&self, settlement: SettlementId, good: GoodId) -> f64 {
+        self.production_ema
+            .get(&settlement)
+            .and_then(|goods| goods.get(&good))
+            .copied()
+            .unwrap_or(0.0)
     }
 
     /// Generate market orders for a settlement.
@@ -92,8 +117,21 @@ impl MerchantAgent {
             }
 
             let ema_price = price_ema.get(&good).copied().unwrap_or(1.0);
-            let target = TARGET_STOCK_BUFFER; // TODO: could be per-good based on production rate
+            // Target buffer = ticks × expected production rate
+            // Falls back to 1.0 if no production data yet (so target = 2.0 minimum)
+            let production_rate = self.expected_production(settlement, good).max(1.0);
+            let target = TARGET_STOCK_BUFFER * production_rate;
             let norm_c = qty / target;
+
+            // Debug: trace merchant state
+            eprintln!(
+                "[merchant] good={} stock={:.1} prod_ema={:.1} target={:.1} norm_c={:.2}",
+                good,
+                qty,
+                self.expected_production(settlement, good),
+                target,
+                norm_c
+            );
 
             // Sweep price points and generate supply curve
             for i in 0..PRICE_SWEEP_POINTS {

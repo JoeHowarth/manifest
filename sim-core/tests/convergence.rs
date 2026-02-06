@@ -903,13 +903,16 @@ fn multi_pop_basic_convergence() {
     // - Perfect balance!
     // - Start with ample stock on both sides
 
+    // With 100 workers × 1 grain = 100 production/tick
+    // Merchant target buffer = 2 ticks × 100 = 200 units
+    // Start merchant at target to avoid initial reluctance to sell
     let result = run_multi_pop_trial(
         100,   // pops
         2,     // facilities
         1.0,   // production per worker (1 grain each)
         1.0,   // initial price
         5.0,   // initial pop stock (at target)
-        100.0, // initial merchant stock
+        200.0, // initial merchant stock (at 2-tick buffer target)
         200,   // ticks
     );
 

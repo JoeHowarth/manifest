@@ -689,6 +689,9 @@ impl World {
     fn run_production_phase(&mut self, recipes: &[Recipe]) {
         let facility_ids: Vec<FacilityId> = self.facilities.keys().copied().collect();
 
+        // Accumulate production per (merchant, settlement, good) to update EMA once per tick
+        let mut production_totals: HashMap<(MerchantId, SettlementId, GoodId), f64> = HashMap::new();
+
         for facility_id in facility_ids {
             // Get facility info (immutable borrow)
             let (settlement_id, merchant_id, quality_multiplier) = {
@@ -780,7 +783,22 @@ impl World {
                     }
                 }
             }
-            let _ = result; // Suppress unused warning when feature disabled
+
+            // Accumulate production for this merchant/settlement/good
+            for (&good_id, &qty) in &result.outputs_produced {
+                if qty > 0.0 {
+                    *production_totals
+                        .entry((merchant_id, settlement_id, good_id))
+                        .or_insert(0.0) += qty;
+                }
+            }
+        }
+
+        // Update each merchant's production EMA once with total production this tick
+        for ((merchant_id, settlement_id, good_id), total_qty) in production_totals {
+            if let Some(merchant) = self.merchants.get_mut(&merchant_id) {
+                merchant.record_production(settlement_id, good_id, total_qty);
+            }
         }
     }
 
