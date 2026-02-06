@@ -893,6 +893,12 @@ fn run_multi_pop_trial(
 /// Basic multi-pop convergence test with ideal starting conditions
 #[test]
 fn multi_pop_basic_convergence() {
+    use sim_core::instrument;
+
+    // Install tracing subscriber to collect data
+    instrument::clear();
+    instrument::install_subscriber();
+
     println!("\n=== Multi-Pop Basic Convergence ===\n");
 
     // Ideal conditions:
@@ -958,6 +964,10 @@ fn multi_pop_basic_convergence() {
         println!("  First 10: {:?}", early);
         println!("  Last 10:  {:?}", late);
     }
+
+    // Analyze the data
+    let dfs = instrument::drain_to_dataframes();
+    analyze_currency_flow(&dfs);
 
     assert!(!result.extinction, "Population went extinct!");
     assert!(
@@ -1033,7 +1043,483 @@ fn multi_pop_sweep_initial_conditions() {
     // Drain and convert to polars DataFrames
     let dfs = instrument::drain_to_dataframes();
 
-    analyze_death_spiral(&dfs);
+    analyze_currency_flow(&dfs);
+}
+
+fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude::DataFrame>) {
+    use polars::prelude::*;
+
+    println!("\n{}", "=".repeat(60));
+    println!("=== CURRENCY FLOW ANALYSIS ===");
+    println!("{}\n", "=".repeat(60));
+
+    // First, let's see what DFs we have
+    println!("Available DataFrames: {:?}\n", dfs.keys().collect::<Vec<_>>());
+
+    // Q0: PRODUCTION per tick - is production actually happening?
+    println!("--- Q0: PRODUCTION PER TICK ---\n");
+    if let Some(prod_io) = dfs.get("production_io") {
+        let production = prod_io.clone().lazy()
+            .filter(col("direction").eq(lit("output")))
+            .group_by([col("tick")])
+            .agg([col("quantity").sum().alias("produced")])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+        println!("Production output per tick:");
+        println!("{}\n", production);
+    }
+
+    // Q0b: MORTALITY - when are pops dying?
+    println!("--- Q0b: MORTALITY ---\n");
+    if let Some(mortality) = dfs.get("mortality") {
+        let deaths = mortality.clone().lazy()
+            .filter(col("outcome").eq(lit("dies")))
+            .group_by([col("tick")])
+            .agg([col("pop_id").count().alias("deaths")])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+        println!("Deaths per tick:");
+        println!("{}\n", deaths);
+
+        // Also show food satisfaction
+        let satisfaction = mortality.clone().lazy()
+            .group_by([col("tick")])
+            .agg([
+                col("food_satisfaction").mean().alias("avg_food_sat"),
+                col("pop_id").count().alias("pop_count"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+        println!("Food satisfaction per tick:");
+        println!("{}\n", satisfaction);
+    }
+
+    // Q0c: What happens around tick 24-25?
+    println!("--- Q0c: TICK 20-30 DEEP DIVE ---\n");
+    if let Some(fill) = dfs.get("fill") {
+        let fills_around = fill.clone().lazy()
+            .filter(col("tick").gt_eq(lit(20u64)).and(col("tick").lt_eq(lit(30u64))))
+            .group_by([col("tick")])
+            .agg([
+                col("quantity").sum().alias("total_volume"),
+                col("price").mean().alias("avg_price"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+        println!("Fills around tick 20-30:");
+        println!("{}\n", fills_around);
+    }
+
+    if let Some(consumption) = dfs.get("consumption") {
+        let consumption_around = consumption.clone().lazy()
+            .filter(col("tick").gt_eq(lit(20u64)).and(col("tick").lt_eq(lit(30u64))))
+            .group_by([col("tick")])
+            .agg([
+                col("actual").sum().alias("consumed"),
+                col("desired").sum().alias("desired"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+        println!("Consumption around tick 20-30:");
+        println!("{}\n", consumption_around);
+    }
+
+    // Q0d: CHECK LABOR ASSIGNMENTS - are workers being hired every tick?
+    println!("--- Q0d: LABOR ASSIGNMENTS BY TICK ---\n");
+    if let Some(assignment) = dfs.get("assignment") {
+        let assignments_all = assignment.clone().lazy()
+            .group_by([col("tick")])
+            .agg([col("pop_id").count().alias("workers_hired")])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+        // Get tick column and print all values
+        let ticks: Vec<u64> = assignments_all.column("tick").unwrap()
+            .u64().unwrap().into_iter().flatten().collect();
+        let workers: Vec<u32> = assignments_all.column("workers_hired").unwrap()
+            .u32().unwrap().into_iter().flatten().collect();
+        println!("Workers hired per tick (expect 100 every tick):");
+        println!("  Ticks with data: {:?}", ticks);
+        println!("  Workers: {:?}", workers);
+        // What ticks are missing (assuming we expect 1 to max_tick)?
+        if let Some(&max_tick) = ticks.last() {
+            let missing: Vec<u64> = (1..=max_tick).filter(|t| !ticks.contains(t)).collect();
+            println!("  MISSING TICKS: {:?}", missing);
+        }
+        println!();
+    }
+
+    // Q0e: Check labor bids to see if facilities are even bidding on missing ticks
+    println!("--- Q0e: LABOR BIDS BY TICK ---\n");
+    if let Some(labor_bid) = dfs.get("labor_bid") {
+        let bids_all = labor_bid.clone().lazy()
+            .group_by([col("tick")])
+            .agg([
+                col("max_wage").count().alias("num_bids"),
+                col("max_wage").sum().alias("total_wages_offered"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+        let ticks: Vec<u64> = bids_all.column("tick").unwrap()
+            .u64().unwrap().into_iter().flatten().collect();
+        let bids: Vec<u32> = bids_all.column("num_bids").unwrap()
+            .u32().unwrap().into_iter().flatten().collect();
+        println!("Labor bids per tick:");
+        println!("  Ticks with bids: {:?}", ticks);
+        println!("  Num bids: {:?}", bids);
+        if let Some(&max_tick) = ticks.last() {
+            let missing: Vec<u64> = (1..=max_tick).filter(|t| !ticks.contains(t)).collect();
+            println!("  MISSING BID TICKS: {:?}", missing);
+        }
+
+        // Check bid vs ask wages on the problem ticks
+        let bids_detail = labor_bid.clone().lazy()
+            .group_by([col("tick")])
+            .agg([
+                col("max_wage").mean().alias("avg_bid"),
+                col("max_wage").min().alias("min_bid"),
+                col("mvp").mean().alias("avg_mvp"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+        println!("\nBid wages by tick (first 30):");
+        // Print all rows for the first 30 ticks
+        let ticks: Vec<u64> = bids_detail.column("tick").unwrap()
+            .u64().unwrap().into_iter().flatten().collect();
+        let bids: Vec<f64> = bids_detail.column("avg_bid").unwrap()
+            .f64().unwrap().into_iter().flatten().collect();
+        for (t, b) in ticks.iter().zip(bids.iter()).take(30) {
+            let status = if *b < 0.5 { " ← BELOW MIN_WAGE" } else { "" };
+            println!("  tick {:>2}: bid={:.3}{}", t, b, status);
+        }
+    }
+
+    // Q0f: Check worker asks (min_wage)
+    println!("--- Q0f: WORKER ASKS ---\n");
+    if let Some(labor_ask) = dfs.get("labor_ask") {
+        let asks_detail = labor_ask.clone().lazy()
+            .group_by([col("tick")])
+            .agg([
+                col("min_wage").mean().alias("avg_min_wage"),
+                col("min_wage").count().alias("num_workers"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+        println!("Worker min_wage by tick:");
+        println!("{}\n", asks_detail.head(Some(30)));
+        println!();
+    }
+
+    // Q1: Wages paid vs merchant revenue from sales
+    println!("--- Q1: MONEY IN vs MONEY OUT ---\n");
+
+    if let (Some(assignment), Some(fill)) = (dfs.get("assignment"), dfs.get("fill")) {
+        // Total wages paid per tick (money flows from merchant to pops)
+        let wages_out = assignment.clone().lazy()
+            .group_by([col("tick")])
+            .agg([
+                col("wage").sum().alias("wages_paid"),
+                col("wage").count().alias("workers_hired"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        // Revenue from merchant sales per tick (money flows from pops to merchant)
+        let revenue_in = fill.clone().lazy()
+            .filter(col("agent_type").eq(lit("merchant")).and(col("side").eq(lit("sell"))))
+            .with_column((col("price") * col("quantity")).alias("revenue"))
+            .group_by([col("tick")])
+            .agg([col("revenue").sum().alias("sales_revenue")])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        println!("Wages paid per tick (merchant → pops):");
+        println!("{}\n", wages_out);
+
+        println!("Sales revenue per tick (pops → merchant):");
+        println!("{}\n", revenue_in);
+
+        println!("KEY: If wages_paid > sales_revenue, merchant loses money each tick.\n");
+    }
+
+    // Q2: Labor bid details - are facilities bidding at all?
+    println!("--- Q2: LABOR BIDS OVER TIME ---\n");
+
+    if let Some(labor_bid) = dfs.get("labor_bid") {
+        let bids_summary = labor_bid.clone().lazy()
+            .group_by([col("tick")])
+            .agg([
+                col("max_wage").count().alias("num_bids"),
+                col("max_wage").sum().alias("total_bid_value"),
+                col("max_wage").mean().alias("avg_bid"),
+                col("max_wage").min().alias("min_bid"),
+                col("max_wage").max().alias("max_bid"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        println!("Labor bids per tick:");
+        println!("{}\n", bids_summary);
+    }
+
+    // Q3: Why do assignments stop? Check assignment counts
+    println!("--- Q3: ASSIGNMENTS OVER TIME ---\n");
+
+    if let Some(assignment) = dfs.get("assignment") {
+        let assignments_summary = assignment.clone().lazy()
+            .group_by([col("tick")])
+            .agg([
+                col("wage").count().alias("num_assignments"),
+                col("wage").sum().alias("total_wages"),
+                col("wage").mean().alias("avg_wage"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        println!("Assignments per tick:");
+        println!("{}\n", assignments_summary);
+    }
+
+    // Q4: Labor asks - are workers offering labor?
+    println!("--- Q4: LABOR SUPPLY (ASKS) OVER TIME ---\n");
+
+    if let Some(labor_ask) = dfs.get("labor_ask") {
+        let asks_summary = labor_ask.clone().lazy()
+            .group_by([col("tick")])
+            .agg([
+                col("min_wage").count().alias("num_workers"),
+                col("min_wage").mean().alias("avg_min_wage"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        println!("Labor supply per tick:");
+        println!("{}\n", asks_summary);
+    }
+
+    // Q5: Net cash flow - cumulative balance
+    println!("--- Q5: CUMULATIVE CASH FLOW ---\n");
+
+    if let (Some(assignment), Some(fill)) = (dfs.get("assignment"), dfs.get("fill")) {
+        // Get wages per tick
+        let wages = assignment.clone().lazy()
+            .group_by([col("tick")])
+            .agg([col("wage").sum().alias("wages_paid")])
+            .collect()
+            .unwrap();
+
+        // Get revenue per tick
+        let revenue = fill.clone().lazy()
+            .filter(col("agent_type").eq(lit("merchant")).and(col("side").eq(lit("sell"))))
+            .with_column((col("price") * col("quantity")).alias("revenue"))
+            .group_by([col("tick")])
+            .agg([col("revenue").sum().alias("sales_revenue")])
+            .collect()
+            .unwrap();
+
+        // Join and compute net flow
+        let cash_flow = wages.lazy()
+            .join(revenue.lazy(), [col("tick")], [col("tick")], JoinArgs::new(JoinType::Left))
+            .with_column(col("sales_revenue").fill_null(lit(0.0)))
+            .with_column((col("sales_revenue") - col("wages_paid")).alias("net_flow"))
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        println!("Net cash flow per tick (revenue - wages):");
+        println!("{}\n", cash_flow);
+
+        println!("KEY: Negative net_flow means merchant is bleeding money.\n");
+    }
+
+    // Q6: Zoom in on the transition (ticks 12-16)
+    println!("--- Q6: TRANSITION POINT (ticks 12-16) ---\n");
+
+    if let Some(labor_bid) = dfs.get("labor_bid") {
+        let transition = labor_bid.clone().lazy()
+            .filter(col("tick").gt_eq(lit(12u64)).and(col("tick").lt_eq(lit(16u64))))
+            .group_by([col("tick")])
+            .agg([
+                col("max_wage").mean().alias("avg_bid"),
+                col("mvp").mean().alias("avg_mvp"),
+                col("adaptive_bid").mean().alias("avg_adaptive"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        println!("Facility bids around transition (bid vs mvp vs adaptive):");
+        println!("{}\n", transition);
+
+        println!("KEY: max_wage = min(mvp, adaptive_bid)");
+        println!("     If adaptive_bid < min_wage (0.5), no workers hired.\n");
+    }
+
+    if let Some(labor_ask) = dfs.get("labor_ask") {
+        let transition = labor_ask.clone().lazy()
+            .filter(col("tick").gt_eq(lit(12u64)).and(col("tick").lt_eq(lit(16u64))))
+            .group_by([col("tick")])
+            .agg([
+                col("min_wage").mean().alias("avg_ask"),
+                col("min_wage").count().alias("workers"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        println!("Worker asks around transition:");
+        println!("{}\n", transition);
+    }
+
+    // Q7: Price vs MVP over time
+    println!("--- Q7: PRICE → MVP → BID CHAIN ---\n");
+
+    if let (Some(fill), Some(labor_bid)) = (dfs.get("fill"), dfs.get("labor_bid")) {
+        // Get clearing prices per tick
+        let prices = fill.clone().lazy()
+            .group_by([col("tick")])
+            .agg([col("price").max().alias("goods_price")])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        // Get MVP per tick
+        let mvps = labor_bid.clone().lazy()
+            .group_by([col("tick")])
+            .agg([col("mvp").mean().alias("avg_mvp")])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        println!("Goods price (from fills):");
+        println!("{}\n", prices);
+
+        println!("MVPs plateau after tick 13 because no fills → price EMA not updated?\n");
+    }
+
+    // Q8: Why isn't merchant selling from stockpile?
+    println!("--- Q8: MERCHANT STOCKPILE & ORDERS ---\n");
+
+    if let Some(order) = dfs.get("order") {
+        // Check merchant sell orders around the transition
+        let merchant_sells = order.clone().lazy()
+            .filter(col("agent_type").eq(lit("merchant")).and(col("side").eq(lit("sell"))))
+            .group_by([col("tick")])
+            .agg([
+                col("quantity").sum().alias("offered_qty"),
+                col("limit_price").min().alias("min_ask"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        println!("Merchant sell orders per tick:");
+        println!("{}\n", merchant_sells);
+
+        // Check what ticks have NO merchant sell orders
+        let all_ticks: Vec<u64> = (1..=20).collect();
+        println!("Merchant sell orders stop after tick 13.");
+        println!("Does merchant have stockpile but isn't selling? Let's check production_io.\n");
+    }
+
+    // Check production_io to see if goods are being produced and where they go
+    if let Some(prod_io) = dfs.get("production_io") {
+        println!("Production IO schema: {:?}\n", prod_io.schema());
+
+        let outputs = prod_io.clone().lazy()
+            .group_by([col("tick")])
+            .agg([col("quantity").sum().alias("total_io")])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        println!("Production IO per tick:");
+        println!("{}\n", outputs);
+    }
+
+    // Q9: Compare offered qty vs actual fills
+    println!("--- Q9: OFFERED vs FILLED ---\n");
+
+    if let (Some(order), Some(fill)) = (dfs.get("order"), dfs.get("fill")) {
+        let offered = order.clone().lazy()
+            .filter(col("agent_type").eq(lit("merchant")).and(col("side").eq(lit("sell"))))
+            .group_by([col("tick")])
+            .agg([col("quantity").sum().alias("offered")])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        let filled = fill.clone().lazy()
+            .filter(col("agent_type").eq(lit("merchant")).and(col("side").eq(lit("sell"))))
+            .group_by([col("tick")])
+            .agg([col("quantity").sum().alias("sold")])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        // Join them
+        let comparison = offered.lazy()
+            .join(filled.lazy(), [col("tick")], [col("tick")], JoinArgs::new(JoinType::Left))
+            .with_column(col("sold").fill_null(lit(0.0)))
+            .collect()
+            .unwrap();
+
+        println!("Merchant: offered vs sold per tick:");
+        println!("{}\n", comparison);
+
+        println!("KEY: If sold >> what merchant actually HAS, there's a bug.");
+        println!("     Merchant can't sell goods it doesn't own.\n");
+    }
+
+    // Q10: Check for goods creation bug
+    println!("--- Q10: GOODS CONSERVATION CHECK ---\n");
+
+    // Compare production vs fills
+    if let (Some(prod_io), Some(fill)) = (dfs.get("production_io"), dfs.get("fill")) {
+
+        // Total produced (outputs only)
+        let produced = prod_io.clone().lazy()
+            .filter(col("direction").eq(lit("output")))
+            .select([col("quantity").sum().alias("total_produced")])
+            .collect()
+            .unwrap();
+
+        // Total bought by pops (should equal total sold by merchant)
+        let pop_bought = fill.clone().lazy()
+            .filter(col("agent_type").eq(lit("pop")).and(col("side").eq(lit("buy"))))
+            .select([col("quantity").sum().alias("pop_bought")])
+            .collect()
+            .unwrap();
+
+        let merchant_sold = fill.clone().lazy()
+            .filter(col("agent_type").eq(lit("merchant")).and(col("side").eq(lit("sell"))))
+            .select([col("quantity").sum().alias("merchant_sold")])
+            .collect()
+            .unwrap();
+
+        println!("Total produced (from production_io): {:?}", produced);
+        println!("Pop bought (from fills): {:?}", pop_bought);
+        println!("Merchant sold (from fills): {:?}", merchant_sold);
+
+        // Initial merchant stock was 1.0 in "worst case" scenario
+        // So total available = produced + 1.0
+        println!();
+        println!("Initial merchant stock: 1.0");
+        println!("If merchant_sold > produced + 1.0, goods were created from nothing!");
+    }
 }
 
 fn analyze_death_spiral(dfs: &std::collections::HashMap<String, polars::prelude::DataFrame>) {
@@ -1247,6 +1733,79 @@ fn analyze_death_spiral(dfs: &std::collections::HashMap<String, polars::prelude:
 
         println!("Food satisfaction per tick:");
         println!("{}\n", satisfaction);
+    }
+
+    // === Q7: Why Does Trading Stop? ===
+    println!("--- Q7: TRADING STOPPAGE (Why do fills become 0?) ---\n");
+
+    if let Some(order) = dfs.get("order") {
+        // Check if orders exist after tick 13
+        let orders_by_tick = order.clone().lazy()
+            .group_by([col("tick"), col("agent_type"), col("side")])
+            .agg([
+                col("quantity").sum().alias("total_qty"),
+                col("limit_price").min().alias("min_price"),
+                col("limit_price").max().alias("max_price"),
+            ])
+            .sort(["tick", "agent_type", "side"], Default::default())
+            .collect()
+            .unwrap();
+
+        // Show ticks 10-20 to see what happens around the stoppage
+        let filtered = orders_by_tick.clone().lazy()
+            .filter(col("tick").gt_eq(lit(10u64)).and(col("tick").lt_eq(lit(20u64))))
+            .collect()
+            .unwrap();
+
+        println!("Orders around tick 10-20 (when trading stops):");
+        println!("{}\n", filtered);
+
+        // Check price overlap: do pop bids meet merchant asks?
+        let pop_bids = order.clone().lazy()
+            .filter(col("agent_type").eq(lit("pop")).and(col("side").eq(lit("buy"))))
+            .group_by([col("tick")])
+            .agg([col("limit_price").max().alias("max_bid")])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        let merchant_asks = order.clone().lazy()
+            .filter(col("agent_type").eq(lit("merchant")).and(col("side").eq(lit("sell"))))
+            .group_by([col("tick")])
+            .agg([col("limit_price").min().alias("min_ask")])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        println!("Pop max bid vs Merchant min ask (need bid >= ask for trade):");
+        println!("Pop max bids:\n{}\n", pop_bids);
+        println!("Merchant min asks:\n{}\n", merchant_asks);
+
+        // Check if merchant has stock but isn't selling
+        println!("KEY INSIGHT: Merchant stops placing sell orders after tick 13.");
+        println!("             Pops keep bidding but there's nothing to buy.\n");
+    }
+
+    // Check production timeline
+    if let Some(production) = dfs.get("production") {
+        let prod_by_tick = production.clone().lazy()
+            .group_by([col("tick")])
+            .agg([col("runs").sum().alias("total_runs")])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        println!("Production timeline (runs per tick):");
+        let n = prod_by_tick.height();
+        if n > 25 {
+            let head = prod_by_tick.head(Some(20));
+            let tail = prod_by_tick.tail(Some(5));
+            println!("{}", head);
+            println!("...");
+            println!("{}\n", tail);
+        } else {
+            println!("{}\n", prod_by_tick);
+        }
     }
 
     // === Summary ===
