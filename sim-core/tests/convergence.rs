@@ -895,9 +895,7 @@ fn run_multi_pop_trial(
 fn multi_pop_basic_convergence() {
     use sim_core::instrument;
 
-    // Install tracing subscriber to collect data
-    instrument::clear();
-    instrument::install_subscriber();
+    let mut recorder = instrument::ScopedRecorder::new("data", "basic_convergence");
 
     println!("\n=== Multi-Pop Basic Convergence ===\n");
 
@@ -965,9 +963,8 @@ fn multi_pop_basic_convergence() {
         println!("  Last 10:  {:?}", late);
     }
 
-    // Analyze the data
-    let dfs = instrument::drain_to_dataframes();
-    analyze_currency_flow(&dfs);
+    let dfs = recorder.get();
+    analyze_currency_flow(dfs);
 
     assert!(!result.extinction, "Population went extinct!");
     assert!(
@@ -982,9 +979,7 @@ fn multi_pop_basic_convergence() {
 fn multi_pop_sweep_initial_conditions() {
     use sim_core::instrument;
 
-    // Install tracing subscriber to collect data
-    instrument::clear();
-    instrument::install_subscriber();
+    let mut recorder = instrument::ScopedRecorder::new("data", "sweep_initial_conditions");
 
     println!("\n=== Multi-Pop Initial Conditions Sweep ===\n");
 
@@ -1040,10 +1035,8 @@ fn multi_pop_sweep_initial_conditions() {
         println!("This may be expected for 'worst case' initial conditions.");
     }
 
-    // Drain and convert to polars DataFrames
-    let dfs = instrument::drain_to_dataframes();
-
-    analyze_currency_flow(&dfs);
+    let dfs = recorder.get();
+    analyze_currency_flow(dfs);
 }
 
 fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude::DataFrame>) {

@@ -289,29 +289,100 @@ pub fn save_parquet(dfs: &mut HashMap<String, DataFrame>, dir: &std::path::Path)
     Ok(())
 }
 
+const MONTH_ABBREVS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/// Format a SystemTime as `Feb06_20_13` (Mon DD _ HH _ MM) for human-readable run directory names.
+fn timestamp_str(t: std::time::SystemTime) -> String {
+    let secs = t
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let secs_per_day = 86400u64;
+    let secs_today = secs % secs_per_day;
+    let hour = secs_today / 3600;
+    let minute = (secs_today % 3600) / 60;
+
+    let mut days = (secs / secs_per_day) as i64;
+    let mut year = 1970i64;
+    loop {
+        let days_in_year = if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
+            366
+        } else {
+            365
+        };
+        if days < days_in_year {
+            break;
+        }
+        days -= days_in_year;
+        year += 1;
+    }
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let month_days = [
+        31,
+        if leap { 29 } else { 28 },
+        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+    ];
+    let mut month = 0usize;
+    for &md in &month_days {
+        if days < md {
+            break;
+        }
+        days -= md;
+        month += 1;
+    }
+    let day = days as u32 + 1;
+
+    format!(
+        "{}{:02}_{:02}_{:02}",
+        MONTH_ABBREVS[month], day, hour, minute
+    )
+}
+
+/// Replace non-alphanumeric chars with `_` and truncate for use in directory names.
+fn sanitize(name: &str) -> String {
+    let s: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    if s.len() > 60 {
+        s[..60].to_string()
+    } else {
+        s
+    }
+}
+
 /// RAII guard that clears instrumentation data on creation and saves to parquet on drop.
 ///
+/// Each run gets its own timestamped subdirectory under the parent dir.
 /// Call `.get()` after the simulation to drain and access the DataFrames for analysis.
-/// On drop, the cached DataFrames are written to parquet.
+/// On drop, parquet files and a `_ready` sentinel are written.
 ///
 /// ```ignore
-/// let mut recorder = instrument::ScopedRecorder::new("output/my_test");
+/// let mut rec = instrument::ScopedRecorder::new("data", "basic_convergence");
 /// // ... run simulation ...
-/// let dfs = recorder.get();
+/// let dfs = rec.get();
 /// analyze(&dfs);
-/// // recorder drops here, writes parquet files
+/// // rec drops → writes data/0206_1430_basic_convergence/*.parquet + _ready
 /// ```
 pub struct ScopedRecorder {
-    output_dir: std::path::PathBuf,
+    run_dir: std::path::PathBuf,
+    run_name: String,
     dfs: Option<HashMap<String, DataFrame>>,
 }
 
 impl ScopedRecorder {
-    pub fn new(output_dir: impl Into<std::path::PathBuf>) -> Self {
+    /// Create a new recorder. Writes to `{parent}/{MMDD_HHMM}_{name}/`.
+    pub fn new(parent: impl Into<std::path::PathBuf>, name: &str) -> Self {
+        let run_name = format!("{}_{}", timestamp_str(std::time::SystemTime::now()), sanitize(name));
+        let run_dir = parent.into().join(&run_name);
         clear();
         install_subscriber();
         Self {
-            output_dir: output_dir.into(),
+            run_dir,
+            run_name,
             dfs: None,
         }
     }
@@ -321,6 +392,14 @@ impl ScopedRecorder {
     pub fn get(&mut self) -> &HashMap<String, DataFrame> {
         self.dfs.get_or_insert_with(drain_to_dataframes)
     }
+
+    pub fn run_name(&self) -> &str {
+        &self.run_name
+    }
+
+    pub fn run_dir(&self) -> &std::path::Path {
+        &self.run_dir
+    }
 }
 
 impl Drop for ScopedRecorder {
@@ -329,13 +408,19 @@ impl Drop for ScopedRecorder {
         if dfs.is_empty() {
             return;
         }
-        if let Err(e) = save_parquet(&mut dfs, &self.output_dir) {
-            eprintln!("ScopedRecorder: failed to write parquet: {}", e);
+        if let Err(e) = save_parquet(&mut dfs, &self.run_dir) {
+            eprintln!("ScopedRecorder({}): failed to write parquet: {}", self.run_name, e);
+            return;
+        }
+        // Write sentinel so watchers know all parquets are complete
+        let sentinel = self.run_dir.join("_ready");
+        if let Err(e) = std::fs::File::create(&sentinel) {
+            eprintln!("ScopedRecorder({}): failed to write _ready sentinel: {}", self.run_name, e);
         } else {
             eprintln!(
                 "ScopedRecorder: wrote {} tables to {}",
                 dfs.len(),
-                self.output_dir.display()
+                self.run_dir.display()
             );
         }
     }

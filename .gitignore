@@ -15,6 +15,9 @@ web-client/src/wasm/
 *.swp
 *.swo
 
+# Instrumentation data
+data/
+
 # OS
 .DS_Store
 Thumbs.db
