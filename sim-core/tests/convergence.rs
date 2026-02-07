@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
 use sim_core::{
     AnchoredGoodConfig, ExternalMarketConfig, SettlementFriction, SubsistenceReservationConfig,
     World,
@@ -27,6 +28,7 @@ use sim_core::{
 const GRAIN: GoodId = 1;
 const LABORER: SkillId = SkillId(1);
 const MULTI_POP_PRODUCTION_RATE: f64 = 1.05;
+const CALIBRATION_PRODUCTION_RATE: f64 = 1.0;
 
 // === SYSTEM PARAMETERS ===
 
@@ -1229,6 +1231,228 @@ fn run_multi_pop_trial_with_controls(
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct CalibrationScenario {
+    depth_per_pop: f64,
+    transport_bps: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CalibrationScenarioSummary {
+    depth_per_pop: f64,
+    transport_bps: f64,
+    median_tail_price: f64,
+    median_tail_employment: f64,
+    median_import_reliance: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CalibrationSweepSnapshot {
+    ticks: usize,
+    tail_window: usize,
+    reps: usize,
+    scenarios: Vec<CalibrationScenarioSummary>,
+}
+
+fn median(mut values: Vec<f64>) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    values[values.len() / 2]
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_calibration_trial(
+    num_pops: usize,
+    num_facilities: usize,
+    production_rate: f64,
+    initial_price: f64,
+    initial_pop_stock: f64,
+    initial_merchant_stock: f64,
+    ticks: usize,
+    scenario: CalibrationScenario,
+) -> (f64, f64, f64) {
+    let mut world = create_multi_pop_world(
+        num_pops,
+        num_facilities,
+        initial_price,
+        initial_pop_stock,
+        initial_merchant_stock,
+    );
+
+    let settlement = *world.settlements.keys().next().unwrap();
+    let mut external = ExternalMarketConfig::default();
+    external.anchors.insert(
+        GRAIN,
+        AnchoredGoodConfig {
+            world_price: 10.0,
+            spread_bps: 500.0,
+            base_depth: 0.0,
+            depth_per_pop: scenario.depth_per_pop,
+            tiers: 9,
+            tier_step_bps: 300.0,
+        },
+    );
+    external.frictions.insert(
+        settlement,
+        SettlementFriction {
+            enabled: true,
+            transport_bps: scenario.transport_bps,
+            tariff_bps: 0.0,
+            risk_bps: 0.0,
+        },
+    );
+    world.set_external_market(external);
+    if let Some(cfg) = subsistence_config_for_controls(StabilizationControls {
+        enable_external_grain_anchor: true,
+        enable_subsistence_reservation: true,
+    }) {
+        world.set_subsistence_reservation(cfg);
+    }
+
+    let recipes = vec![make_recipe(production_rate)];
+    let good_profiles = make_good_profiles();
+    let needs = make_needs(1.0);
+
+    let mut price_history = Vec::with_capacity(ticks);
+    let mut employment_rate_history = Vec::with_capacity(ticks);
+    let mut import_reliance_history = Vec::with_capacity(ticks);
+    let mut prev_cumulative_imports = 0.0;
+
+    for _ in 0..ticks {
+        world.run_tick(&good_profiles, &needs, &recipes);
+
+        if world.pops.is_empty() {
+            break;
+        }
+
+        let price = world
+            .price_ema
+            .get(&(settlement, GRAIN))
+            .copied()
+            .unwrap_or(0.0);
+        let pop_count = world.pops.len();
+        let employed = world
+            .pops
+            .values()
+            .filter(|p| p.employed_at.is_some())
+            .count();
+        let employment_rate = if pop_count == 0 {
+            0.0
+        } else {
+            employed as f64 / pop_count as f64
+        };
+
+        let cumulative_imports = world
+            .outside_flow_totals
+            .imports_qty
+            .get(&(settlement, GRAIN))
+            .copied()
+            .unwrap_or(0.0);
+        let import_qty_tick = cumulative_imports - prev_cumulative_imports;
+        prev_cumulative_imports = cumulative_imports;
+        let import_reliance = if pop_count == 0 {
+            0.0
+        } else {
+            import_qty_tick.max(0.0) / pop_count as f64
+        };
+
+        price_history.push(price);
+        employment_rate_history.push(employment_rate);
+        import_reliance_history.push(import_reliance);
+    }
+
+    let tail_window = 40usize;
+    let tail_prices = trailing(&price_history, tail_window);
+    let tail_employment = trailing(&employment_rate_history, tail_window);
+    let tail_import = trailing(&import_reliance_history, tail_window);
+
+    (mean(tail_prices), mean(tail_employment), mean(tail_import))
+}
+
+fn compute_calibration_sweep_snapshot() -> CalibrationSweepSnapshot {
+    let scenarios = [
+        CalibrationScenario {
+            depth_per_pop: 0.05,
+            transport_bps: 7000.0,
+        },
+        CalibrationScenario {
+            depth_per_pop: 0.05,
+            transport_bps: 9000.0,
+        },
+        CalibrationScenario {
+            depth_per_pop: 0.05,
+            transport_bps: 11000.0,
+        },
+        CalibrationScenario {
+            depth_per_pop: 0.10,
+            transport_bps: 7000.0,
+        },
+        CalibrationScenario {
+            depth_per_pop: 0.10,
+            transport_bps: 9000.0,
+        },
+        CalibrationScenario {
+            depth_per_pop: 0.10,
+            transport_bps: 11000.0,
+        },
+        CalibrationScenario {
+            depth_per_pop: 0.20,
+            transport_bps: 7000.0,
+        },
+        CalibrationScenario {
+            depth_per_pop: 0.20,
+            transport_bps: 9000.0,
+        },
+        CalibrationScenario {
+            depth_per_pop: 0.20,
+            transport_bps: 11000.0,
+        },
+    ];
+    let reps = 3usize;
+    let ticks = 220usize;
+    let tail_window = 40usize;
+
+    let mut summaries = Vec::with_capacity(scenarios.len());
+    for scenario in scenarios {
+        let mut tail_prices = Vec::with_capacity(reps);
+        let mut tail_employment = Vec::with_capacity(reps);
+        let mut import_reliance = Vec::with_capacity(reps);
+
+        for _ in 0..reps {
+            let (price, employment, imports) = run_calibration_trial(
+                100,
+                2,
+                CALIBRATION_PRODUCTION_RATE,
+                1.0,
+                5.0,
+                210.0,
+                ticks,
+                scenario,
+            );
+            tail_prices.push(price);
+            tail_employment.push(employment);
+            import_reliance.push(imports);
+        }
+
+        summaries.push(CalibrationScenarioSummary {
+            depth_per_pop: scenario.depth_per_pop,
+            transport_bps: scenario.transport_bps,
+            median_tail_price: median(tail_prices),
+            median_tail_employment: median(tail_employment),
+            median_import_reliance: median(import_reliance),
+        });
+    }
+
+    CalibrationSweepSnapshot {
+        ticks,
+        tail_window,
+        reps,
+        scenarios: summaries,
+    }
+}
+
 /// Basic multi-pop convergence test with ideal starting conditions
 #[test]
 fn multi_pop_basic_convergence() {
@@ -1476,6 +1700,135 @@ fn multi_pop_sweep_initial_conditions() {
             final_pops[final_pops.len() / 2]
         );
     }
+}
+
+fn assert_calibration_close(name: &str, actual: f64, expected: f64, abs_tol: f64, rel_tol: f64) {
+    let abs_err = (actual - expected).abs();
+    let rel_err = if expected.abs() > 1e-12 {
+        abs_err / expected.abs()
+    } else {
+        abs_err
+    };
+    assert!(
+        abs_err <= abs_tol || rel_err <= rel_tol,
+        "{name} drifted: actual={actual:.8}, expected={expected:.8}, abs_err={abs_err:.8}, rel_err={rel_err:.8}"
+    );
+}
+
+#[test]
+fn calibration_sweep_reports_grid_and_target_band() {
+    let snapshot = compute_calibration_sweep_snapshot();
+    println!("\n=== Calibration Sweep (Tail Medians) ===\n");
+    println!(
+        "{:>10} {:>14} {:>14} {:>14} {:>16}",
+        "depth/pop", "transport_bps", "tail_price", "employment", "import_rel"
+    );
+    for s in &snapshot.scenarios {
+        println!(
+            "{:>10.2} {:>14.0} {:>14.4} {:>14.4} {:>16.6}",
+            s.depth_per_pop,
+            s.transport_bps,
+            s.median_tail_price,
+            s.median_tail_employment,
+            s.median_import_reliance
+        );
+    }
+
+    let chosen = snapshot
+        .scenarios
+        .iter()
+        .find(|s| (s.depth_per_pop - 0.10).abs() < 1e-9 && (s.transport_bps - 9000.0).abs() < 1e-9)
+        .expect("missing chosen calibration scenario");
+
+    // Target band for the default calibration point.
+    assert!(
+        (0.40..=0.60).contains(&chosen.median_tail_price),
+        "chosen scenario tail price out of target band: {:.4}",
+        chosen.median_tail_price
+    );
+    assert!(
+        (0.95..=1.02).contains(&chosen.median_tail_employment),
+        "chosen scenario employment out of target band: {:.4}",
+        chosen.median_tail_employment
+    );
+    assert!(
+        chosen.median_import_reliance <= 0.05,
+        "chosen scenario import reliance too high: {:.6}",
+        chosen.median_import_reliance
+    );
+}
+
+#[test]
+fn calibration_sweep_matches_saved_baseline() {
+    let expected: CalibrationSweepSnapshot =
+        serde_json::from_str(include_str!("baselines/calibration_sweep_baseline.json"))
+            .expect("valid calibration baseline JSON");
+    let actual = compute_calibration_sweep_snapshot();
+
+    assert_eq!(actual.ticks, expected.ticks, "tick count changed");
+    assert_eq!(
+        actual.tail_window, expected.tail_window,
+        "tail window changed"
+    );
+    assert_eq!(actual.reps, expected.reps, "rep count changed");
+    assert_eq!(
+        actual.scenarios.len(),
+        expected.scenarios.len(),
+        "scenario count changed"
+    );
+
+    for (i, (a, e)) in actual
+        .scenarios
+        .iter()
+        .zip(expected.scenarios.iter())
+        .enumerate()
+    {
+        assert_calibration_close(
+            &format!("scenario[{i}].depth_per_pop"),
+            a.depth_per_pop,
+            e.depth_per_pop,
+            1e-9,
+            1e-9,
+        );
+        assert_calibration_close(
+            &format!("scenario[{i}].transport_bps"),
+            a.transport_bps,
+            e.transport_bps,
+            1e-9,
+            1e-9,
+        );
+        assert_calibration_close(
+            &format!("scenario[{i}].median_tail_price"),
+            a.median_tail_price,
+            e.median_tail_price,
+            0.15,
+            1.5e-1,
+        );
+        assert_calibration_close(
+            &format!("scenario[{i}].median_tail_employment"),
+            a.median_tail_employment,
+            e.median_tail_employment,
+            0.01,
+            2e-2,
+        );
+        assert_calibration_close(
+            &format!("scenario[{i}].median_import_reliance"),
+            a.median_import_reliance,
+            e.median_import_reliance,
+            0.01,
+            2e-1,
+        );
+    }
+}
+
+#[test]
+#[ignore = "regenerates baseline snapshot; run manually when behavior changes"]
+fn regenerate_calibration_sweep_baseline_snapshot() {
+    let snapshot = compute_calibration_sweep_snapshot();
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&snapshot).expect("serializes baseline")
+    );
 }
 
 #[allow(dead_code)]
