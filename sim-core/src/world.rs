@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use crate::agents::{MerchantAgent, Pop, Stockpile};
+use crate::external::{ExternalMarketConfig, OutsideFlowTotals};
 use crate::geography::{Route, Settlement};
 use crate::labor::{FacilityBidState, SkillId};
 use crate::production::{Facility, FacilityType, Recipe, allocate_recipes, execute_production};
@@ -32,6 +33,10 @@ pub struct World {
     /// Facility bid states for adaptive wage bidding
     pub facility_bid_states: HashMap<FacilityId, FacilityBidState>,
 
+    // Optional outside market anchors and accounting
+    pub external_market: Option<ExternalMarketConfig>,
+    pub outside_flow_totals: OutsideFlowTotals,
+
     // ID counters
     next_settlement_id: u32,
     next_agent_id: u32, // shared counter for PopId and MerchantId to avoid collisions
@@ -56,10 +61,16 @@ impl World {
             price_ema: HashMap::new(),
             wage_ema: HashMap::new(),
             facility_bid_states: HashMap::new(),
+            external_market: None,
+            outside_flow_totals: OutsideFlowTotals::default(),
             next_settlement_id: 0,
             next_agent_id: 0, // shared counter for PopId and MerchantId
             next_facility_id: 0,
         }
+    }
+
+    pub fn set_external_market(&mut self, config: ExternalMarketConfig) {
+        self.external_market = Some(config);
     }
 
     // === Simulation Tick ===

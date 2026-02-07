@@ -69,9 +69,10 @@
 
 pub mod agents;
 pub mod consumption;
+pub mod external;
 pub mod geography;
 #[cfg(feature = "instrument")]
-pub mod instrument;
+pub use instrument;
 pub mod labor;
 pub mod market;
 pub mod mortality;
@@ -94,6 +95,9 @@ pub use agents::{ConsumptionResult, MerchantAgent, Pop, Stockpile};
 
 // Geography
 pub use geography::{ResourceQuality, ResourceSlot, ResourceType, Route, Settlement};
+
+// External market
+pub use external::{AnchoredGoodConfig, ExternalMarketConfig, OutsideFlowTotals, SettlementFriction};
 
 // Production
 pub use production::{
