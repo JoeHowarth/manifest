@@ -213,6 +213,15 @@ pub fn generate_worker_asks(worker: &Worker) -> Vec<LaborAsk> {
 /// Generate labor asks for a pop across all their skills.
 /// Pops participate in labor market as a single worker unit.
 pub fn generate_pop_asks(pop: &Pop, next_id: &mut u64) -> Vec<LaborAsk> {
+    generate_pop_asks_with_min_wage(pop, next_id, pop.min_wage)
+}
+
+/// Generate labor asks for a pop with an explicit reservation wage.
+pub fn generate_pop_asks_with_min_wage(
+    pop: &Pop,
+    next_id: &mut u64,
+    min_wage: Price,
+) -> Vec<LaborAsk> {
     pop.skills
         .iter()
         .map(|&skill| {
@@ -220,7 +229,7 @@ pub fn generate_pop_asks(pop: &Pop, next_id: &mut u64) -> Vec<LaborAsk> {
                 id: *next_id,
                 worker_id: pop.id.0, // Use pop ID as worker ID
                 skill,
-                min_wage: pop.min_wage,
+                min_wage,
             };
             *next_id += 1;
             ask

@@ -344,13 +344,21 @@ pub fn run_settlement_tick(
     }
 
     // 5. MARKET CLEARING
+    let price_bias = if outside_market.roles.is_empty() {
+        market::PriceBias::FavorSellers
+    } else {
+        // When outside anchor ladders are present, favor lower-price tie breaks
+        // so import asks can cap shortage spikes in the expected arbitrage band.
+        market::PriceBias::FavorBuyers
+    };
+
     let result = market::clear_multi_market(
         &good_ids,
         all_orders,
         &budgets,
         Some(&seller_inventories),
         20,
-        market::PriceBias::FavorSellers,
+        price_bias,
     );
 
     // 5. APPLY FILLS

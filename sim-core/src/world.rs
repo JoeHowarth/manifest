@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::agents::{MerchantAgent, Pop, Stockpile};
 use crate::external::{ExternalMarketConfig, OutsideFlowTotals};
 use crate::geography::{Route, Settlement};
-use crate::labor::{FacilityBidState, SkillId};
+use crate::labor::{FacilityBidState, SkillId, SubsistenceReservationConfig};
 use crate::production::{Facility, FacilityType, Recipe, allocate_recipes, execute_production};
 use crate::types::{FacilityId, GoodId, MerchantId, PopId, Price, SettlementId};
 
@@ -36,6 +36,7 @@ pub struct World {
     // Optional outside market anchors and accounting
     pub external_market: Option<ExternalMarketConfig>,
     pub outside_flow_totals: OutsideFlowTotals,
+    pub subsistence_reservation: Option<SubsistenceReservationConfig>,
 
     // ID counters
     next_settlement_id: u32,
@@ -63,6 +64,7 @@ impl World {
             facility_bid_states: HashMap::new(),
             external_market: None,
             outside_flow_totals: OutsideFlowTotals::default(),
+            subsistence_reservation: None,
             next_settlement_id: 0,
             next_agent_id: 0, // shared counter for PopId and MerchantId
             next_facility_id: 0,
@@ -71,6 +73,10 @@ impl World {
 
     pub fn set_external_market(&mut self, config: ExternalMarketConfig) {
         self.external_market = Some(config);
+    }
+
+    pub fn set_subsistence_reservation(&mut self, config: SubsistenceReservationConfig) {
+        self.subsistence_reservation = Some(config);
     }
 
     // === Simulation Tick ===
@@ -422,7 +428,8 @@ impl World {
     /// - Player/AI decides when to fund vs abandon struggling facilities
     fn run_labor_phase(&mut self) {
         use crate::labor::{
-            LaborBid, SkillDef, clear_labor_markets, generate_pop_asks, update_wage_emas,
+            LaborBid, SkillDef, build_subsistence_reservation_ladder, clear_labor_markets,
+            generate_pop_asks_with_min_wage, update_wage_emas,
         };
 
         // Collect all skills in use
@@ -513,10 +520,43 @@ impl World {
         }
 
         // === PHASE 2: Generate pop asks ===
+        let subsistence_reservation_by_pop: HashMap<PopId, Price> =
+            if let Some(cfg) = &self.subsistence_reservation {
+                let mut by_pop = HashMap::new();
+                for settlement in self.settlements.values() {
+                    let active_ids: Vec<PopId> = settlement
+                        .pop_ids
+                        .iter()
+                        .copied()
+                        .filter(|id| self.pops.contains_key(id))
+                        .collect();
+                    if active_ids.is_empty() {
+                        continue;
+                    }
+
+                    let grain_price_ref = self
+                        .price_ema
+                        .get(&(settlement.id, cfg.grain_good))
+                        .copied()
+                        .unwrap_or(cfg.default_grain_price);
+
+                    let ladder =
+                        build_subsistence_reservation_ladder(&active_ids, grain_price_ref, cfg);
+                    by_pop.extend(ladder);
+                }
+                by_pop
+            } else {
+                HashMap::new()
+            };
+
         let mut asks = Vec::new();
         let mut next_ask_id = 0u64;
         for pop in self.pops.values() {
-            let mut pop_asks = generate_pop_asks(pop, &mut next_ask_id);
+            let reservation = subsistence_reservation_by_pop
+                .get(&pop.id)
+                .copied()
+                .unwrap_or(pop.min_wage);
+            let mut pop_asks = generate_pop_asks_with_min_wage(pop, &mut next_ask_id, reservation);
 
             #[cfg(feature = "instrument")]
             for ask in &pop_asks {

@@ -188,6 +188,9 @@ pub fn generate_outside_market_orders(
             .entry(import_agent)
             .or_default()
             .insert(good, max_depth);
+        // Include seller agent in budget table so market relaxation bookkeeping
+        // can track its tentative cash flow without panicking.
+        out.budgets.insert(import_agent, 0.0);
         out.budgets.insert(export_agent, export_budget);
     }
 
