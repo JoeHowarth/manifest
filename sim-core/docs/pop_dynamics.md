@@ -95,6 +95,8 @@ For each pop:
 - `compute_consumption(...)` runs two passes in `sim-core/src/consumption/greedy.rs`:
 1. Discovery pass (budgeted by `income_ema`) -> `desired`.
 2. Actual pass (from stockpile, no currency budget) -> `actual`.
+   Actual consumption applies a nonlinear stock-to-target surplus release cap
+   around a baseline floor (subsistence floor and desired tick demand).
 
 Writes:
 - `pop.need_satisfaction` from actual pass.

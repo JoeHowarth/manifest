@@ -82,7 +82,8 @@ Per pop:
 1. Clear `need_satisfaction` for current tick.
 2. Compute two consumption passes:
    - Discovery pass (budgeted by `income_ema`) to infer desired demand.
-   - Actual pass (stock-only with biased virtual prices) to consume goods.
+   - Actual pass (stock-only with biased virtual prices) to consume goods,
+     with nonlinear stock-to-target surplus release around a subsistence floor.
 3. Subtract actual consumption from stock.
 4. Update `desired_consumption_ema` by smoothing desired quantities.
 
