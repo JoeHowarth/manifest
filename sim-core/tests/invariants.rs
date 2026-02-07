@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 
 use sim_core::{
-    AnchoredGoodConfig, ExternalMarketConfig, GoodId, GoodProfile, Need, NeedContribution,
-    OutsideFlowTotals, Pop, PopId, Price, Recipe, SettlementFriction, SettlementId,
-    SubsistenceReservationConfig, UtilityCurve, World,
     labor::SkillId,
     production::{FacilityType, RecipeId},
-    run_settlement_tick,
+    run_settlement_tick, AnchoredGoodConfig, ExternalMarketConfig, GoodId, GoodProfile, Need,
+    NeedContribution, OutsideFlowTotals, Pop, PopId, Price, Recipe, SettlementFriction,
+    SettlementId, SubsistenceReservationConfig, UtilityCurve, World,
 };
 
 const GRAIN: GoodId = 1;
@@ -174,12 +173,13 @@ fn invariant_labor_assignment_accounting_consistent() {
         },
     );
 
-    let recipes = vec![
-        sim_core::Recipe::new(RecipeId::new(1), "Grain Farming", vec![FacilityType::Farm])
-            .with_capacity_cost(1)
-            .with_worker(LABORER, 1)
-            .with_output(GRAIN, 1.0),
-    ];
+    let recipes =
+        vec![
+            sim_core::Recipe::new(RecipeId::new(1), "Grain Farming", vec![FacilityType::Farm])
+                .with_capacity_cost(1)
+                .with_worker(LABORER, 1)
+                .with_output(GRAIN, 1.0),
+        ];
 
     let initial_pop_count = world.pops.len();
     for _ in 0..80 {
@@ -360,4 +360,107 @@ fn invariant_subsistence_allocates_more_to_earlier_pops() {
         a > b && b > c,
         "Subsistence ranking violated: pop1={a:.4}, pop2={b:.4}, pop3={c:.4}"
     );
+}
+
+#[test]
+fn invariant_closed_economy_tick_residual_near_zero() {
+    let mut world = World::new();
+    let settlement = world.add_settlement("LedgerTown", (0.0, 0.0));
+    let merchant = world.add_merchant();
+    let farm = world
+        .add_facility(FacilityType::Farm, settlement, merchant)
+        .unwrap();
+
+    {
+        let facility = world.get_facility_mut(farm).unwrap();
+        facility.capacity = 20;
+        facility.recipe_priorities = vec![RecipeId::new(1)];
+        facility.workers.insert(LABORER, 20);
+    }
+    {
+        let merchant_ref = world.get_merchant_mut(merchant).unwrap();
+        merchant_ref.stockpile_at(settlement).add(GRAIN, 5_000.0);
+    }
+
+    for _ in 0..20 {
+        let pop_id = world.add_pop(settlement).unwrap();
+        let pop = world.get_pop_mut(pop_id).unwrap();
+        pop.skills.insert(LABORER);
+        pop.min_wage = 0.5;
+        pop.currency = 500.0;
+        pop.income_ema = 2.0;
+        pop.stocks.insert(GRAIN, 100.0);
+        pop.desired_consumption_ema.insert(GRAIN, 1.0);
+        pop.employed_at = Some(farm);
+    }
+
+    world.wage_ema.insert(LABORER, 2.0);
+    world.price_ema.insert((settlement, GRAIN), 1.0);
+
+    let good_profiles = vec![GoodProfile {
+        good: GRAIN,
+        contributions: vec![NeedContribution {
+            need_id: "food".to_string(),
+            efficiency: 1.0,
+        }],
+    }];
+
+    let mut needs = HashMap::new();
+    needs.insert(
+        "food".to_string(),
+        Need {
+            id: "food".to_string(),
+            utility_curve: UtilityCurve::Subsistence {
+                // Keep sat pinned near 1.0 so mortality/growth RNG does not fire.
+                requirement: 0.1,
+                steepness: 5.0,
+            },
+        },
+    );
+
+    let recipes =
+        vec![
+            sim_core::Recipe::new(RecipeId::new(1), "Grain Farming", vec![FacilityType::Farm])
+            .with_capacity_cost(1)
+            .with_worker(LABORER, 1)
+            .with_output(GRAIN, 2.0),
+    ];
+
+    let ticks = 20usize;
+    for _ in 0..ticks {
+        world.run_tick(&good_profiles, &needs, &recipes);
+    }
+
+    assert_eq!(
+        world.stock_flow_history.len(),
+        ticks,
+        "stock-flow history should have one entry per world tick"
+    );
+
+    for flow in &world.stock_flow_history {
+        assert!(
+            flow.imports_value_delta.abs() < 1e-9,
+            "closed economy should have zero imports_value_delta at tick {}: {}",
+            flow.tick,
+            flow.imports_value_delta
+        );
+        assert!(
+            flow.exports_value_delta.abs() < 1e-9,
+            "closed economy should have zero exports_value_delta at tick {}: {}",
+            flow.tick,
+            flow.exports_value_delta
+        );
+        assert!(
+            flow.expected_currency_delta_from_external.abs() < 1e-9,
+            "closed economy should have zero expected external delta at tick {}: {}",
+            flow.tick,
+            flow.expected_currency_delta_from_external
+        );
+        assert!(
+            flow.currency_residual.abs() < 1e-6,
+            "currency residual should remain near zero at tick {}: residual={}",
+            flow.tick,
+            flow.currency_residual
+        );
+    }
 }

@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use crate::accounting::{TickStockFlow, capture_world_flow_snapshot, decompose_tick_flow};
 use crate::agents::{MerchantAgent, Pop, Stockpile};
 use crate::external::{ExternalMarketConfig, OutsideFlowTotals};
 use crate::geography::{Route, Settlement};
@@ -37,6 +38,7 @@ pub struct World {
     pub external_market: Option<ExternalMarketConfig>,
     pub outside_flow_totals: OutsideFlowTotals,
     pub subsistence_reservation: Option<SubsistenceReservationConfig>,
+    pub stock_flow_history: Vec<TickStockFlow>,
 
     // ID counters
     next_settlement_id: u32,
@@ -65,6 +67,7 @@ impl World {
             external_market: None,
             outside_flow_totals: OutsideFlowTotals::default(),
             subsistence_reservation: None,
+            stock_flow_history: Vec::new(),
             next_settlement_id: 0,
             next_agent_id: 0, // shared counter for PopId and MerchantId
             next_facility_id: 0,
@@ -98,6 +101,7 @@ impl World {
         use crate::tick::run_settlement_tick;
 
         self.tick += 1;
+        let pre_tick_snapshot = capture_world_flow_snapshot(self);
 
         // === 0. LABOR PHASE ===
         self.run_labor_phase();
@@ -180,6 +184,45 @@ impl World {
 
         // === 5. MORTALITY PHASE ===
         self.run_mortality_phase();
+
+        let post_tick_snapshot = capture_world_flow_snapshot(self);
+        let tick_flow = decompose_tick_flow(self.tick, &pre_tick_snapshot, &post_tick_snapshot);
+
+        #[cfg(feature = "instrument")]
+        {
+            tracing::info!(
+                target: "stock_flow",
+                tick = tick_flow.tick,
+                pop_currency_before = tick_flow.pop_currency_before,
+                pop_currency_after = tick_flow.pop_currency_after,
+                merchant_currency_before = tick_flow.merchant_currency_before,
+                merchant_currency_after = tick_flow.merchant_currency_after,
+                currency_before = tick_flow.currency_before,
+                currency_after = tick_flow.currency_after,
+                currency_delta = tick_flow.currency_delta,
+                expected_currency_delta_from_external = tick_flow.expected_currency_delta_from_external,
+                currency_residual = tick_flow.currency_residual,
+                imports_value_delta = tick_flow.imports_value_delta,
+                exports_value_delta = tick_flow.exports_value_delta,
+            );
+
+            let mut goods: Vec<_> = tick_flow.goods_delta.keys().copied().collect();
+            goods.sort_unstable();
+            for good in goods {
+                tracing::info!(
+                    target: "stock_flow_good",
+                    tick = tick_flow.tick,
+                    good_id = good,
+                    goods_before = tick_flow.goods_before.get(&good).copied().unwrap_or(0.0),
+                    goods_after = tick_flow.goods_after.get(&good).copied().unwrap_or(0.0),
+                    goods_delta = tick_flow.goods_delta.get(&good).copied().unwrap_or(0.0),
+                    imports_qty_delta = tick_flow.imports_qty_delta.get(&good).copied().unwrap_or(0.0),
+                    exports_qty_delta = tick_flow.exports_qty_delta.get(&good).copied().unwrap_or(0.0),
+                );
+            }
+        }
+
+        self.stock_flow_history.push(tick_flow);
     }
 
     // === Settlement Management ===
