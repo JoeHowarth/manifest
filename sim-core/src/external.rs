@@ -66,10 +66,7 @@ pub struct ExternalMarketConfig {
 impl ExternalMarketConfig {
     /// Settlement-level config with disabled default when unset.
     pub fn friction_for(&self, settlement: SettlementId) -> SettlementFriction {
-        self.frictions
-            .get(&settlement)
-            .cloned()
-            .unwrap_or_default()
+        self.frictions.get(&settlement).cloned().unwrap_or_default()
     }
 }
 
@@ -83,12 +80,24 @@ pub struct OutsideFlowTotals {
 }
 
 impl OutsideFlowTotals {
-    pub fn record_import(&mut self, settlement: SettlementId, good: GoodId, qty: Quantity, value: f64) {
+    pub fn record_import(
+        &mut self,
+        settlement: SettlementId,
+        good: GoodId,
+        qty: Quantity,
+        value: f64,
+    ) {
         *self.imports_qty.entry((settlement, good)).or_insert(0.0) += qty;
         *self.imports_value.entry((settlement, good)).or_insert(0.0) += value;
     }
 
-    pub fn record_export(&mut self, settlement: SettlementId, good: GoodId, qty: Quantity, value: f64) {
+    pub fn record_export(
+        &mut self,
+        settlement: SettlementId,
+        good: GoodId,
+        qty: Quantity,
+        value: f64,
+    ) {
         *self.exports_qty.entry((settlement, good)).or_insert(0.0) += qty;
         *self.exports_value.entry((settlement, good)).or_insert(0.0) += value;
     }
@@ -142,14 +151,17 @@ pub fn generate_outside_market_orders(
             continue;
         }
 
-        let band = (anchor.spread_bps + friction.transport_bps + friction.tariff_bps + friction.risk_bps)
-            / 10_000.0;
+        let band =
+            (anchor.spread_bps + friction.transport_bps + friction.tariff_bps + friction.risk_bps)
+                / 10_000.0;
         let tier_step = anchor.tier_step_bps / 10_000.0;
         let import_agent = import_agent_id(good);
         let export_agent = export_agent_id(good);
 
-        out.roles.insert(import_agent, OutsideAgentRole::ImportSeller);
-        out.roles.insert(export_agent, OutsideAgentRole::ExportBuyer);
+        out.roles
+            .insert(import_agent, OutsideAgentRole::ImportSeller);
+        out.roles
+            .insert(export_agent, OutsideAgentRole::ExportBuyer);
 
         let total_weight = (tiers as f64) * (tiers as f64 + 1.0) * 0.5;
         let mut export_budget = 0.0;

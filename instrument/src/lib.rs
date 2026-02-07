@@ -258,9 +258,7 @@ impl Recorder {
     pub fn to_dataframes(&self) -> HashMap<String, DataFrame> {
         self.tables
             .iter()
-            .filter_map(|(name, table)| {
-                table.to_dataframe().ok().map(|df| (name.clone(), df))
-            })
+            .filter_map(|(name, table)| table.to_dataframe().ok().map(|df| (name.clone(), df)))
             .collect()
     }
 }
@@ -273,7 +271,10 @@ pub fn drain_to_dataframes() -> HashMap<String, DataFrame> {
 
 /// Save all DataFrames as parquet files in the given directory.
 /// Each table becomes `{dir}/{name}.parquet`.
-pub fn save_parquet(dfs: &mut HashMap<String, DataFrame>, dir: &std::path::Path) -> PolarsResult<()> {
+pub fn save_parquet(
+    dfs: &mut HashMap<String, DataFrame>,
+    dir: &std::path::Path,
+) -> PolarsResult<()> {
     std::fs::create_dir_all(dir).map_err(|e| PolarsError::IO {
         error: e.into(),
         msg: None,
@@ -290,8 +291,7 @@ pub fn save_parquet(dfs: &mut HashMap<String, DataFrame>, dir: &std::path::Path)
 }
 
 const MONTH_ABBREVS: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
 /// Format a SystemTime as `Feb06_20_13` (Mon DD _ HH _ MM) for human-readable run directory names.
@@ -323,7 +323,16 @@ fn timestamp_str(t: std::time::SystemTime) -> String {
     let month_days = [
         31,
         if leap { 29 } else { 28 },
-        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
     ];
     let mut month = 0usize;
     for &md in &month_days {
@@ -347,11 +356,7 @@ fn sanitize(name: &str) -> String {
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect();
-    if s.len() > 60 {
-        s[..60].to_string()
-    } else {
-        s
-    }
+    if s.len() > 60 { s[..60].to_string() } else { s }
 }
 
 /// RAII guard that clears instrumentation data on creation and saves to parquet on drop.
@@ -376,7 +381,11 @@ pub struct ScopedRecorder {
 impl ScopedRecorder {
     /// Create a new recorder. Writes to `{parent}/{MMDD_HHMM}_{name}/`.
     pub fn new(parent: impl Into<std::path::PathBuf>, name: &str) -> Self {
-        let run_name = format!("{}_{}", timestamp_str(std::time::SystemTime::now()), sanitize(name));
+        let run_name = format!(
+            "{}_{}",
+            timestamp_str(std::time::SystemTime::now()),
+            sanitize(name)
+        );
         let run_dir = parent.into().join(&run_name);
         clear();
         install_subscriber();
@@ -409,13 +418,19 @@ impl Drop for ScopedRecorder {
             return;
         }
         if let Err(e) = save_parquet(&mut dfs, &self.run_dir) {
-            eprintln!("ScopedRecorder({}): failed to write parquet: {}", self.run_name, e);
+            eprintln!(
+                "ScopedRecorder({}): failed to write parquet: {}",
+                self.run_name, e
+            );
             return;
         }
         // Write sentinel so watchers know all parquets are complete
         let sentinel = self.run_dir.join("_ready");
         if let Err(e) = std::fs::File::create(&sentinel) {
-            eprintln!("ScopedRecorder({}): failed to write _ready sentinel: {}", self.run_name, e);
+            eprintln!(
+                "ScopedRecorder({}): failed to write _ready sentinel: {}",
+                self.run_name, e
+            );
         } else {
             eprintln!(
                 "ScopedRecorder: wrote {} tables to {}",

@@ -624,7 +624,7 @@ mod tests {
         // Expected: Clears at price 1.0 (not higher), buyer gets 5 units (not 10)
 
         let orders = vec![
-            make_buy(1, 1, 10.0, 1.0), // agent 1 wants 10 @ 1.0
+            make_buy(1, 1, 10.0, 1.0),   // agent 1 wants 10 @ 1.0
             make_sell(2, 2, 100.0, 1.0), // agent 2 offers 100 @ 1.0
         ];
 
@@ -731,14 +731,14 @@ mod tests {
         // This tests per-AGENT budget cap, not per-ORDER cap
 
         let orders = vec![
-            make_buy(1, 1, 2.0, 1.0),  // agent 1 wants 2 @ limit 1.0
-            make_buy(2, 1, 1.0, 1.5),  // agent 1 wants 1 @ limit 1.5
-            make_buy(3, 1, 0.5, 2.0),  // agent 1 wants 0.5 @ limit 2.0
+            make_buy(1, 1, 2.0, 1.0),    // agent 1 wants 2 @ limit 1.0
+            make_buy(2, 1, 1.0, 1.5),    // agent 1 wants 1 @ limit 1.5
+            make_buy(3, 1, 0.5, 2.0),    // agent 1 wants 0.5 @ limit 2.0
             make_sell(10, 2, 10.0, 1.0), // seller offers 10 @ 1.0
         ];
 
         let mut budgets = HashMap::new();
-        budgets.insert(1, 1.0);  // agent 1 has budget 1.0
+        budgets.insert(1, 1.0); // agent 1 has budget 1.0
         budgets.insert(2, 1000.0);
 
         let result = clear_single_market(1, &orders, Some(&budgets), None, PriceBias::FavorSellers);

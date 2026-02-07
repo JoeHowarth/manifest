@@ -97,7 +97,9 @@ pub use agents::{ConsumptionResult, MerchantAgent, Pop, Stockpile};
 pub use geography::{ResourceQuality, ResourceSlot, ResourceType, Route, Settlement};
 
 // External market
-pub use external::{AnchoredGoodConfig, ExternalMarketConfig, OutsideFlowTotals, SettlementFriction};
+pub use external::{
+    AnchoredGoodConfig, ExternalMarketConfig, OutsideFlowTotals, SettlementFriction,
+};
 
 // Production
 pub use production::{

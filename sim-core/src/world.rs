@@ -742,7 +742,8 @@ impl World {
         let facility_ids: Vec<FacilityId> = self.facilities.keys().copied().collect();
 
         // Accumulate production per (merchant, settlement, good) to update EMA once per tick
-        let mut production_totals: HashMap<(MerchantId, SettlementId, GoodId), f64> = HashMap::new();
+        let mut production_totals: HashMap<(MerchantId, SettlementId, GoodId), f64> =
+            HashMap::new();
 
         for facility_id in facility_ids {
             // Get facility info (immutable borrow)

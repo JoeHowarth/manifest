@@ -31,6 +31,7 @@ const LABORER: SkillId = SkillId(1);
 
 /// Tunable system parameters for convergence tests
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 struct SystemParams {
     /// Production output per tick (recipe output)
     production_rate: f64,
@@ -159,6 +160,7 @@ fn make_needs(consumption_requirement: f64) -> HashMap<String, Need> {
 // === CONVERGENCE RESULT ===
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct ConvergenceResult {
     final_price: f64,
     final_pop_stock: f64,
@@ -172,6 +174,7 @@ struct ConvergenceResult {
     failure_reason: Option<String>,
 }
 
+#[allow(dead_code)]
 fn variance(data: &[f64]) -> f64 {
     if data.is_empty() {
         return 0.0;
@@ -742,6 +745,7 @@ fn create_multi_pop_world(
 
 /// Result of multi-pop trial
 #[derive(Debug)]
+#[allow(dead_code)]
 struct MultiPopResult {
     final_price: f64,
     final_pop_count: usize,
@@ -750,14 +754,234 @@ struct MultiPopResult {
     final_merchant_stock: f64,
     price_history: Vec<f64>,
     pop_count_history: Vec<usize>,
+    employed_history: Vec<usize>,
+    food_satisfaction_history: Vec<f64>,
+    diagnostics: ConvergenceDiagnostics,
     converged: bool,
+    weakly_stable: bool,
     extinction: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ConvergenceThresholds {
+    trailing_window: usize,
+    pop_stability_window: usize,
+    max_price_std: f64,
+    max_abs_pop_slope: f64,
+    max_abs_stock_slope: f64,
+    min_employment_rate: f64,
+    min_food_satisfaction_mean: f64,
+}
+
+impl Default for ConvergenceThresholds {
+    fn default() -> Self {
+        Self {
+            trailing_window: 50,
+            pop_stability_window: 25,
+            max_price_std: 0.05,
+            max_abs_pop_slope: 0.10,
+            max_abs_stock_slope: 2.0,
+            min_employment_rate: 0.50,
+            min_food_satisfaction_mean: 0.95,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+#[allow(dead_code)]
+struct ConvergenceDiagnostics {
+    trailing_window: usize,
+    price_mean: f64,
+    price_std: f64,
+    pop_slope_per_tick: f64,
+    merchant_stock_slope_per_tick: f64,
+    mean_net_external_qty: f64,
+    employment_rate_mean: f64,
+    food_satisfaction_mean: f64,
+    food_satisfaction_min: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct EquilibriumPrediction {
+    formal_capacity: usize,
+    feasible_pop_min: usize,
+    feasible_pop_max: usize,
+    approx_best_pop: usize,
+    best_abs_gap: f64,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 struct StabilizationControls {
     enable_external_grain_anchor: bool,
     enable_subsistence_reservation: bool,
+}
+
+fn subsistence_config_for_controls(
+    controls: StabilizationControls,
+) -> Option<SubsistenceReservationConfig> {
+    if controls.enable_subsistence_reservation {
+        Some(SubsistenceReservationConfig {
+            grain_good: GRAIN,
+            // Keep fallback below initial formal wage so all workers can be hired
+            // at startup, then let crowding dynamics shape asks over time.
+            q_max: 0.08,
+            crowding_alpha: 0.02,
+            default_grain_price: 10.0,
+        })
+    } else {
+        None
+    }
+}
+
+fn subsistence_total_output(unemployed: usize, cfg: &SubsistenceReservationConfig) -> f64 {
+    (1..=unemployed)
+        .map(|k| cfg.q_max / (1.0 + cfg.crowding_alpha.max(0.0) * (k as f64 - 1.0)))
+        .sum()
+}
+
+fn mean(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        0.0
+    } else {
+        values.iter().sum::<f64>() / values.len() as f64
+    }
+}
+
+fn std_dev(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let m = mean(values);
+    (values.iter().map(|v| (v - m).powi(2)).sum::<f64>() / values.len() as f64).sqrt()
+}
+
+fn slope_per_tick(values: &[f64]) -> f64 {
+    if values.len() <= 1 {
+        0.0
+    } else {
+        (values[values.len() - 1] - values[0]) / (values.len() as f64 - 1.0)
+    }
+}
+
+fn trailing<'a, T>(values: &'a [T], n: usize) -> &'a [T] {
+    if values.len() <= n {
+        values
+    } else {
+        &values[values.len() - n..]
+    }
+}
+
+fn evaluate_convergence(
+    prices: &[f64],
+    pops: &[usize],
+    employed: &[usize],
+    merchant_stock: &[f64],
+    net_external_qty: &[f64],
+    food_satisfaction: &[f64],
+    extinction: bool,
+    thresholds: ConvergenceThresholds,
+) -> (ConvergenceDiagnostics, bool) {
+    let price_w = trailing(prices, thresholds.trailing_window);
+    let pop_w = trailing(pops, thresholds.pop_stability_window);
+    let employed_w = trailing(employed, thresholds.trailing_window);
+    let stock_w = trailing(merchant_stock, thresholds.trailing_window);
+    let ext_w = trailing(net_external_qty, thresholds.trailing_window);
+    let food_sat_w = trailing(food_satisfaction, thresholds.trailing_window);
+
+    let pop_w_f: Vec<f64> = pop_w.iter().map(|&v| v as f64).collect();
+    let employment_rates: Vec<f64> = pop_w
+        .iter()
+        .zip(employed_w.iter())
+        .map(|(&p, &h)| if p == 0 { 0.0 } else { h as f64 / p as f64 })
+        .collect();
+    let food_satisfaction_min = food_sat_w
+        .iter()
+        .fold(1.0, |acc, &v| if v < acc { v } else { acc });
+
+    let diagnostics = ConvergenceDiagnostics {
+        trailing_window: thresholds.trailing_window,
+        price_mean: mean(price_w),
+        price_std: std_dev(price_w),
+        pop_slope_per_tick: slope_per_tick(&pop_w_f),
+        merchant_stock_slope_per_tick: slope_per_tick(stock_w),
+        mean_net_external_qty: mean(ext_w),
+        employment_rate_mean: mean(&employment_rates),
+        food_satisfaction_mean: mean(food_sat_w),
+        food_satisfaction_min,
+    };
+
+    let converged = !extinction
+        && diagnostics.price_std <= thresholds.max_price_std
+        && diagnostics.pop_slope_per_tick.abs() <= thresholds.max_abs_pop_slope
+        && diagnostics.merchant_stock_slope_per_tick.abs() <= thresholds.max_abs_stock_slope
+        && diagnostics.employment_rate_mean >= thresholds.min_employment_rate
+        && diagnostics.food_satisfaction_mean >= thresholds.min_food_satisfaction_mean;
+
+    (diagnostics, converged)
+}
+
+fn is_weakly_stable(diagnostics: &ConvergenceDiagnostics, extinction: bool) -> bool {
+    !extinction
+        && diagnostics.price_std <= 0.06
+        && diagnostics.employment_rate_mean >= 0.90
+        && diagnostics.food_satisfaction_mean >= 0.95
+}
+
+fn predict_equilibrium_population(
+    initial_pop: usize,
+    formal_capacity: usize,
+    production_rate: f64,
+    consumption_requirement: f64,
+    subsistence_cfg: Option<&SubsistenceReservationConfig>,
+) -> EquilibriumPrediction {
+    // Solve formal + subsistence ~= consumption with zero net external flow.
+    // The solution can be a range, not a single point.
+    let max_search = initial_pop.saturating_mul(3).max(formal_capacity + 200);
+    let mut best_n = initial_pop.max(1);
+    let mut best_abs_gap = f64::MAX;
+    let mut feasible_min = None;
+    let mut feasible_max = None;
+    let exact_tol = 1e-9;
+
+    for n in 1..=max_search {
+        let employed = n.min(formal_capacity);
+        let unemployed = n.saturating_sub(employed);
+        let formal = employed as f64 * production_rate;
+        let subsistence = subsistence_cfg
+            .map(|cfg| subsistence_total_output(unemployed, cfg))
+            .unwrap_or(0.0);
+        let need = n as f64 * consumption_requirement;
+        let balance_gap = formal + subsistence - need;
+        let abs_gap = balance_gap.abs();
+        if abs_gap <= exact_tol {
+            feasible_min = Some(feasible_min.unwrap_or(n));
+            feasible_max = Some(n);
+        }
+        if abs_gap < best_abs_gap {
+            best_abs_gap = abs_gap;
+            best_n = n;
+        }
+    }
+
+    let (feasible_pop_min, feasible_pop_max) = match (feasible_min, feasible_max) {
+        (Some(min_n), Some(max_n)) => (min_n, max_n),
+        _ => (best_n, best_n),
+    };
+    if feasible_pop_min <= initial_pop && initial_pop <= feasible_pop_max {
+        best_n = initial_pop;
+    } else if feasible_pop_max < initial_pop {
+        best_n = feasible_pop_max;
+    } else if feasible_pop_min > initial_pop {
+        best_n = feasible_pop_min;
+    }
+
+    EquilibriumPrediction {
+        formal_capacity,
+        feasible_pop_min,
+        feasible_pop_max,
+        approx_best_pop: best_n,
+        best_abs_gap,
+    }
 }
 
 fn enable_stabilizers_for_settlement(
@@ -792,15 +1016,8 @@ fn enable_stabilizers_for_settlement(
         world.set_external_market(external);
     }
 
-    if controls.enable_subsistence_reservation {
-        world.set_subsistence_reservation(SubsistenceReservationConfig {
-            grain_good: GRAIN,
-            // Keep fallback below initial formal wage so all workers can be hired
-            // at startup, then let crowding dynamics shape asks over time.
-            q_max: 0.08,
-            crowding_alpha: 0.02,
-            default_grain_price: 10.0,
-        });
+    if let Some(cfg) = subsistence_config_for_controls(controls) {
+        world.set_subsistence_reservation(cfg);
     }
 }
 
@@ -853,6 +1070,12 @@ fn run_multi_pop_trial_with_controls(
 
     let mut price_history = Vec::new();
     let mut pop_count_history = Vec::new();
+    let mut employed_history = Vec::new();
+    let mut merchant_stock_history = Vec::new();
+    let mut net_external_qty_history = Vec::new();
+    let mut food_satisfaction_history = Vec::new();
+    let mut prev_cumulative_net_external_qty = 0.0;
+    let verbose = std::env::var_os("CONVERGENCE_VERBOSE").is_some();
 
     for tick in 0..ticks {
         world.run_tick(&good_profiles, &needs, &recipes);
@@ -860,15 +1083,59 @@ fn run_multi_pop_trial_with_controls(
         if let Some(&price) = world.price_ema.get(&(settlement, GRAIN)) {
             price_history.push(price);
         }
-        pop_count_history.push(world.pops.len());
 
-        // Debug output for first few ticks
-        if tick < 5 || world.pops.len() < num_pops / 2 {
-            let employed = world
+        let pop_count = world.pops.len();
+        let employed = world
+            .pops
+            .values()
+            .filter(|p| p.employed_at.is_some())
+            .count();
+        let merc_stock = world
+            .merchants
+            .values()
+            .next()
+            .map(|m| {
+                m.stockpiles
+                    .get(&settlement)
+                    .map(|s| s.get(GRAIN))
+                    .unwrap_or(0.0)
+            })
+            .unwrap_or(0.0);
+
+        let cumulative_imports = world
+            .outside_flow_totals
+            .imports_qty
+            .get(&(settlement, GRAIN))
+            .copied()
+            .unwrap_or(0.0);
+        let cumulative_exports = world
+            .outside_flow_totals
+            .exports_qty
+            .get(&(settlement, GRAIN))
+            .copied()
+            .unwrap_or(0.0);
+        let cumulative_net_external_qty = cumulative_imports - cumulative_exports;
+        let net_external_qty_tick = cumulative_net_external_qty - prev_cumulative_net_external_qty;
+        prev_cumulative_net_external_qty = cumulative_net_external_qty;
+        let avg_satisfaction: f64 = if world.pops.is_empty() {
+            0.0
+        } else {
+            world
                 .pops
                 .values()
-                .filter(|p| p.employed_at.is_some())
-                .count();
+                .map(|p| p.need_satisfaction.get("food").copied().unwrap_or(0.0))
+                .sum::<f64>()
+                / world.pops.len() as f64
+        };
+
+        pop_count_history.push(pop_count);
+        employed_history.push(employed);
+        merchant_stock_history.push(merc_stock);
+        net_external_qty_history.push(net_external_qty_tick);
+        food_satisfaction_history.push(avg_satisfaction);
+
+        // Debug output for first few ticks
+        if verbose && (tick < 5 || pop_count < num_pops / 2) {
             let avg_stock: f64 = if world.pops.is_empty() {
                 0.0
             } else {
@@ -879,32 +1146,11 @@ fn run_multi_pop_trial_with_controls(
                     .sum::<f64>()
                     / world.pops.len() as f64
             };
-            let avg_satisfaction: f64 = if world.pops.is_empty() {
-                0.0
-            } else {
-                world
-                    .pops
-                    .values()
-                    .map(|p| p.need_satisfaction.get("food").copied().unwrap_or(0.0))
-                    .sum::<f64>()
-                    / world.pops.len() as f64
-            };
             let avg_income: f64 = if world.pops.is_empty() {
                 0.0
             } else {
                 world.pops.values().map(|p| p.income_ema).sum::<f64>() / world.pops.len() as f64
             };
-            let merc_stock = world
-                .merchants
-                .values()
-                .next()
-                .map(|m| {
-                    m.stockpiles
-                        .get(&settlement)
-                        .map(|s| s.get(GRAIN))
-                        .unwrap_or(0.0)
-                })
-                .unwrap_or(0.0);
             let price = world
                 .price_ema
                 .get(&(settlement, GRAIN))
@@ -913,15 +1159,16 @@ fn run_multi_pop_trial_with_controls(
 
             if tick < 5 || tick % 10 == 0 {
                 println!(
-                    "tick {:>3}: pops={:>3} employed={:>3} avg_stock={:.2} avg_sat={:.2} avg_inc={:.2} merc_stk={:.1} price={:.3}",
+                    "tick {:>3}: pops={:>3} employed={:>3} avg_stock={:.2} avg_sat={:.2} avg_inc={:.2} merc_stk={:.1} price={:.3} ext={:+.2}",
                     tick,
-                    world.pops.len(),
+                    pop_count,
                     employed,
                     avg_stock,
                     avg_satisfaction,
                     avg_income,
                     merc_stock,
-                    price
+                    price,
+                    net_external_qty_tick
                 );
             }
         }
@@ -949,7 +1196,18 @@ fn run_multi_pop_trial_with_controls(
         .unwrap_or(0.0);
 
     let extinction = final_pop_count == 0;
-    let converged = !extinction && final_price > 0.1 && final_price < 20.0;
+    let thresholds = ConvergenceThresholds::default();
+    let (diagnostics, converged) = evaluate_convergence(
+        &price_history,
+        &pop_count_history,
+        &employed_history,
+        &merchant_stock_history,
+        &net_external_qty_history,
+        &food_satisfaction_history,
+        extinction,
+        thresholds,
+    );
+    let weakly_stable = is_weakly_stable(&diagnostics, extinction);
 
     MultiPopResult {
         final_price,
@@ -959,7 +1217,11 @@ fn run_multi_pop_trial_with_controls(
         final_merchant_stock,
         price_history,
         pop_count_history,
+        employed_history,
+        food_satisfaction_history,
+        diagnostics,
         converged,
+        weakly_stable,
         extinction,
     }
 }
@@ -967,10 +1229,6 @@ fn run_multi_pop_trial_with_controls(
 /// Basic multi-pop convergence test with ideal starting conditions
 #[test]
 fn multi_pop_basic_convergence() {
-    use sim_core::instrument;
-
-    let mut recorder = instrument::ScopedRecorder::new("data", "basic_convergence");
-
     println!("\n=== Multi-Pop Basic Convergence ===\n");
 
     // Ideal conditions:
@@ -984,139 +1242,224 @@ fn multi_pop_basic_convergence() {
     // With 100 workers × 1 grain = 100 production/tick
     // Merchant target buffer = 2 ticks × 100 = 200 units
     // Start merchant at target to avoid initial reluctance to sell
-    let result = run_multi_pop_trial_with_controls(
+    let controls = StabilizationControls {
+        enable_external_grain_anchor: true,
+        enable_subsistence_reservation: true,
+    };
+    let eq = predict_equilibrium_population(
         100,
-        2,
+        100, // 2 facilities × 50 capacity
         1.0,
         1.0,
-        5.0,
-        200.0,
-        200,
-        StabilizationControls {
-            enable_external_grain_anchor: true,
-            enable_subsistence_reservation: true,
-        },
+        subsistence_config_for_controls(controls).as_ref(),
     );
-
-    println!("Setup: 100 pops, 2 facilities producing 50 each");
-    println!("  Production: 100/tick, Consumption: 100/tick (balanced)");
-    println!();
-    println!("Results after 200 ticks:");
-    println!("  Final price: {:.3}", result.final_price);
     println!(
-        "  Pop count: {} → {}",
-        result.initial_pop_count, result.final_pop_count
+        "Analytical equilibrium prediction: capacity={}, feasible_pop_range=[{}, {}], best_pop={} (abs_gap={:.4})",
+        eq.formal_capacity,
+        eq.feasible_pop_min,
+        eq.feasible_pop_max,
+        eq.approx_best_pop,
+        eq.best_abs_gap
     );
-    println!("  Pop stock total: {:.1}", result.final_total_pop_stock);
-    println!("  Merchant stock: {:.1}", result.final_merchant_stock);
-    println!("  Converged: {}", result.converged);
-    println!("  Extinction: {}", result.extinction);
 
-    // Show price trajectory
-    if result.price_history.len() >= 20 {
-        let early = &result.price_history[..10];
-        let late = &result.price_history[result.price_history.len() - 10..];
-        println!();
-        println!("Price trajectory:");
-        println!(
-            "  First 10: {:?}",
-            early
-                .iter()
-                .map(|p| format!("{:.2}", p))
-                .collect::<Vec<_>>()
-        );
-        println!(
-            "  Last 10:  {:?}",
-            late.iter().map(|p| format!("{:.2}", p)).collect::<Vec<_>>()
-        );
+    let reps = 5usize;
+    let min_success_rate = 0.60f64;
+    let mut successes = 0usize;
+    let mut final_pops = Vec::new();
+    let mut final_prices = Vec::new();
+    let mut last_diag = ConvergenceDiagnostics::default();
+
+    for rep in 0..reps {
+        let result = run_multi_pop_trial_with_controls(100, 2, 1.0, 1.0, 5.0, 200.0, 200, controls);
+
+        if rep == 0 {
+            println!("Setup: 100 pops, 2 facilities producing 50 each");
+            println!("  Production: 100/tick, Consumption: 100/tick (balanced)");
+            println!("  Sample final price: {:.3}", result.final_price);
+            println!(
+                "  Sample pop count: {} → {}",
+                result.initial_pop_count, result.final_pop_count
+            );
+            println!("  Sample strict_converged: {}", result.converged);
+            println!("  Sample weakly_stable: {}", result.weakly_stable);
+            println!("  Sample extinction: {}", result.extinction);
+            println!(
+                "  Sample diagnostics: window={} price_std={:.4} pop_slope={:.4} stock_slope={:.4} mean_net_ext={:.3} empl_rate={:.3} food_sat_mean={:.3}",
+                result.diagnostics.trailing_window,
+                result.diagnostics.price_std,
+                result.diagnostics.pop_slope_per_tick,
+                result.diagnostics.merchant_stock_slope_per_tick,
+                result.diagnostics.mean_net_external_qty,
+                result.diagnostics.employment_rate_mean,
+                result.diagnostics.food_satisfaction_mean,
+            );
+        }
+
+        if result.weakly_stable {
+            successes += 1;
+        }
+        final_pops.push(result.final_pop_count);
+        final_prices.push(result.final_price);
+        last_diag = result.diagnostics;
     }
 
-    // Show pop count trajectory
-    if result.pop_count_history.len() >= 20 {
-        let early = &result.pop_count_history[..10];
-        let late = &result.pop_count_history[result.pop_count_history.len() - 10..];
-        println!();
-        println!("Pop count trajectory:");
-        println!("  First 10: {:?}", early);
-        println!("  Last 10:  {:?}", late);
-    }
+    final_pops.sort_unstable();
+    final_prices.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let median_pop = final_pops[final_pops.len() / 2];
+    let median_price = final_prices[final_prices.len() / 2];
+    let success_rate = successes as f64 / reps as f64;
 
-    let dfs = recorder.get();
-    analyze_currency_flow(dfs);
+    println!(
+        "Rep summary: reps={} success_rate={:.2} median_pop={} median_price={:.3}",
+        reps, success_rate, median_pop, median_price
+    );
 
-    assert!(!result.extinction, "Population went extinct!");
     assert!(
-        result.converged,
-        "Failed to converge: price = {:.3}",
-        result.final_price
+        success_rate >= min_success_rate,
+        "Basic convergence success rate too low: {:.2} < {:.2}, last_diag={:?}",
+        success_rate,
+        min_success_rate,
+        last_diag
+    );
+    assert!(
+        median_pop >= eq.feasible_pop_min && median_pop <= eq.feasible_pop_max,
+        "Median pop {} outside analytical feasible range [{}, {}]",
+        median_pop,
+        eq.feasible_pop_min,
+        eq.feasible_pop_max
     );
 }
 
 /// Test stability with various initial conditions
 #[test]
 fn multi_pop_sweep_initial_conditions() {
-    use sim_core::instrument;
-
-    let mut recorder = instrument::ScopedRecorder::new("data", "sweep_initial_conditions");
-
     println!("\n=== Multi-Pop Initial Conditions Sweep ===\n");
 
     let scenarios = [
-        // (price, pop_stock, merc_stock, description)
-        // (1.0, 5.0, 100.0, "ideal"),
-        // (0.5, 5.0, 100.0, "low price"),
-        // (2.0, 5.0, 100.0, "high price"),
-        // (1.0, 0.0, 100.0, "pops start hungry"),
-        // (1.0, 5.0, 0.0, "merchant starts empty"),
-        (2.0, 2.0, 1.0, "worst case"),
+        // (price, pop_stock, merchant_stock, description, min_success_rate)
+        (1.0, 5.0, 200.0, "balanced_buffer", 0.67),
+        (0.6, 5.0, 0.0, "empty_merchant_low_price", 0.67),
+        (1.4, 4.0, 120.0, "moderate_high_price", 0.67),
+        (1.0, 2.0, 80.0, "low_buffers", 0.67),
     ];
+    let stress_scenarios = [
+        // Characterization-only: intentionally harsh starts.
+        (2.0, 2.0, 1.0, "worst_case"),
+        (3.0, 1.0, 10.0, "high_price_starvation"),
+        (1.2, 0.5, 80.0, "hungry_pops"),
+    ];
+    let controls = StabilizationControls {
+        enable_external_grain_anchor: true,
+        enable_subsistence_reservation: true,
+    };
+    let reps_per_scenario = 3usize;
 
     println!(
-        "{:>12} {:>8} {:>8} {:>10} {:>8} {:>8} {:>6}",
-        "scenario", "pop_stk", "m_stk", "final_p", "pops", "surviv%", "ok"
+        "{:>24} {:>8} {:>8} {:>8} {:>8} {:>10} {:>10} {:>8} {:>6}",
+        "scenario", "price0", "pop0", "m0", "reps", "succ_rate", "med_pop", "med_p", "ok"
     );
 
     let mut failures = Vec::new();
 
-    for (price, pop_stock, merc_stock, desc) in &scenarios {
-        let result = run_multi_pop_trial(
-            100,
-            2,
-            1.0, // 1 grain per worker
-            *price,
-            *pop_stock,
-            *merc_stock,
-            300,
-        );
+    for (price, pop_stock, merc_stock, desc, min_success_rate) in &scenarios {
+        let mut successes = 0usize;
+        let mut final_pops = Vec::new();
+        let mut final_prices = Vec::new();
 
-        let survival_pct = result.final_pop_count as f64 / result.initial_pop_count as f64 * 100.0;
-        let ok = !result.extinction && result.final_pop_count >= 10;
+        for _rep in 0..reps_per_scenario {
+            let result = run_multi_pop_trial_with_controls(
+                100,
+                2,
+                1.0, // 1 grain per worker
+                *price,
+                *pop_stock,
+                *merc_stock,
+                220,
+                controls,
+            );
+            let ok = result.weakly_stable && result.final_pop_count >= 10;
+            if ok {
+                successes += 1;
+            }
+            final_pops.push(result.final_pop_count);
+            final_prices.push(result.final_price);
+        }
+
+        final_pops.sort_unstable();
+        final_prices.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let median_pop = final_pops[final_pops.len() / 2];
+        let median_price = final_prices[final_prices.len() / 2];
+        let success_rate = successes as f64 / reps_per_scenario as f64;
+        let ok = success_rate >= *min_success_rate;
 
         println!(
-            "{:>12} {:>8.1} {:>8.1} {:>10.3} {:>8} {:>7.1}% {:>6}",
+            "{:>24} {:>8.2} {:>8.1} {:>8.1} {:>8} {:>10.2} {:>10} {:>8.3} {:>6}",
             desc,
+            price,
             pop_stock,
             merc_stock,
-            result.final_price,
-            result.final_pop_count,
-            survival_pct,
+            reps_per_scenario,
+            success_rate,
+            median_pop,
+            median_price,
             if ok { "✓" } else { "✗" }
         );
 
         if !ok {
-            failures.push(desc);
+            failures.push(*desc);
         }
     }
 
-    if !failures.is_empty() {
-        println!("\nNote: Some scenarios had significant population loss.");
-        println!("This may be expected for 'worst case' initial conditions.");
-    }
+    assert!(
+        failures.is_empty(),
+        "Convergence sweep failed for scenarios: {:?}",
+        failures
+    );
 
-    let dfs = recorder.get();
-    analyze_currency_flow(dfs);
+    println!("\nStress characterization (non-gating):");
+    println!(
+        "{:>24} {:>8} {:>8} {:>8} {:>8} {:>10} {:>10} {:>8}",
+        "scenario", "price0", "pop0", "m0", "reps", "surv_rate", "conv_rate", "med_pop"
+    );
+    for (price, pop_stock, merc_stock, desc) in &stress_scenarios {
+        let mut survivors = 0usize;
+        let mut converged = 0usize;
+        let mut final_pops = Vec::new();
+        for _rep in 0..reps_per_scenario {
+            let result = run_multi_pop_trial_with_controls(
+                100,
+                2,
+                1.0,
+                *price,
+                *pop_stock,
+                *merc_stock,
+                220,
+                controls,
+            );
+            if !result.extinction {
+                survivors += 1;
+            }
+            if !result.extinction && result.converged {
+                converged += 1;
+            }
+            final_pops.push(result.final_pop_count);
+        }
+        final_pops.sort_unstable();
+        println!(
+            "{:>24} {:>8.2} {:>8.1} {:>8.1} {:>8} {:>10.2} {:>10.2} {:>8}",
+            desc,
+            price,
+            pop_stock,
+            merc_stock,
+            reps_per_scenario,
+            survivors as f64 / reps_per_scenario as f64,
+            converged as f64 / reps_per_scenario as f64,
+            final_pops[final_pops.len() / 2]
+        );
+    }
 }
 
+#[allow(dead_code)]
 fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude::DataFrame>) {
     use polars::prelude::*;
 
@@ -1125,12 +1468,17 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
     println!("{}\n", "=".repeat(60));
 
     // First, let's see what DFs we have
-    println!("Available DataFrames: {:?}\n", dfs.keys().collect::<Vec<_>>());
+    println!(
+        "Available DataFrames: {:?}\n",
+        dfs.keys().collect::<Vec<_>>()
+    );
 
     // Q0: PRODUCTION per tick - is production actually happening?
     println!("--- Q0: PRODUCTION PER TICK ---\n");
     if let Some(prod_io) = dfs.get("production_io") {
-        let production = prod_io.clone().lazy()
+        let production = prod_io
+            .clone()
+            .lazy()
             .filter(col("direction").eq(lit("output")))
             .group_by([col("tick")])
             .agg([col("quantity").sum().alias("produced")])
@@ -1144,7 +1492,9 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
     // Q0b: MORTALITY - when are pops dying?
     println!("--- Q0b: MORTALITY ---\n");
     if let Some(mortality) = dfs.get("mortality") {
-        let deaths = mortality.clone().lazy()
+        let deaths = mortality
+            .clone()
+            .lazy()
             .filter(col("outcome").eq(lit("dies")))
             .group_by([col("tick")])
             .agg([col("pop_id").count().alias("deaths")])
@@ -1155,7 +1505,9 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
         println!("{}\n", deaths);
 
         // Also show food satisfaction
-        let satisfaction = mortality.clone().lazy()
+        let satisfaction = mortality
+            .clone()
+            .lazy()
             .group_by([col("tick")])
             .agg([
                 col("food_satisfaction").mean().alias("avg_food_sat"),
@@ -1171,8 +1523,14 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
     // Q0c: What happens around tick 24-25?
     println!("--- Q0c: TICK 20-30 DEEP DIVE ---\n");
     if let Some(fill) = dfs.get("fill") {
-        let fills_around = fill.clone().lazy()
-            .filter(col("tick").gt_eq(lit(20u64)).and(col("tick").lt_eq(lit(30u64))))
+        let fills_around = fill
+            .clone()
+            .lazy()
+            .filter(
+                col("tick")
+                    .gt_eq(lit(20u64))
+                    .and(col("tick").lt_eq(lit(30u64))),
+            )
             .group_by([col("tick")])
             .agg([
                 col("quantity").sum().alias("total_volume"),
@@ -1186,8 +1544,14 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
     }
 
     if let Some(consumption) = dfs.get("consumption") {
-        let consumption_around = consumption.clone().lazy()
-            .filter(col("tick").gt_eq(lit(20u64)).and(col("tick").lt_eq(lit(30u64))))
+        let consumption_around = consumption
+            .clone()
+            .lazy()
+            .filter(
+                col("tick")
+                    .gt_eq(lit(20u64))
+                    .and(col("tick").lt_eq(lit(30u64))),
+            )
             .group_by([col("tick")])
             .agg([
                 col("actual").sum().alias("consumed"),
@@ -1203,17 +1567,31 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
     // Q0d: CHECK LABOR ASSIGNMENTS - are workers being hired every tick?
     println!("--- Q0d: LABOR ASSIGNMENTS BY TICK ---\n");
     if let Some(assignment) = dfs.get("assignment") {
-        let assignments_all = assignment.clone().lazy()
+        let assignments_all = assignment
+            .clone()
+            .lazy()
             .group_by([col("tick")])
             .agg([col("pop_id").count().alias("workers_hired")])
             .sort(["tick"], Default::default())
             .collect()
             .unwrap();
         // Get tick column and print all values
-        let ticks: Vec<u64> = assignments_all.column("tick").unwrap()
-            .u64().unwrap().into_iter().flatten().collect();
-        let workers: Vec<u32> = assignments_all.column("workers_hired").unwrap()
-            .u32().unwrap().into_iter().flatten().collect();
+        let ticks: Vec<u64> = assignments_all
+            .column("tick")
+            .unwrap()
+            .u64()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect();
+        let workers: Vec<u32> = assignments_all
+            .column("workers_hired")
+            .unwrap()
+            .u32()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect();
         println!("Workers hired per tick (expect 100 every tick):");
         println!("  Ticks with data: {:?}", ticks);
         println!("  Workers: {:?}", workers);
@@ -1228,7 +1606,9 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
     // Q0e: Check labor bids to see if facilities are even bidding on missing ticks
     println!("--- Q0e: LABOR BIDS BY TICK ---\n");
     if let Some(labor_bid) = dfs.get("labor_bid") {
-        let bids_all = labor_bid.clone().lazy()
+        let bids_all = labor_bid
+            .clone()
+            .lazy()
             .group_by([col("tick")])
             .agg([
                 col("max_wage").count().alias("num_bids"),
@@ -1237,10 +1617,22 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
             .sort(["tick"], Default::default())
             .collect()
             .unwrap();
-        let ticks: Vec<u64> = bids_all.column("tick").unwrap()
-            .u64().unwrap().into_iter().flatten().collect();
-        let bids: Vec<u32> = bids_all.column("num_bids").unwrap()
-            .u32().unwrap().into_iter().flatten().collect();
+        let ticks: Vec<u64> = bids_all
+            .column("tick")
+            .unwrap()
+            .u64()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect();
+        let bids: Vec<u32> = bids_all
+            .column("num_bids")
+            .unwrap()
+            .u32()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect();
         println!("Labor bids per tick:");
         println!("  Ticks with bids: {:?}", ticks);
         println!("  Num bids: {:?}", bids);
@@ -1250,7 +1642,9 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
         }
 
         // Check bid vs ask wages on the problem ticks
-        let bids_detail = labor_bid.clone().lazy()
+        let bids_detail = labor_bid
+            .clone()
+            .lazy()
             .group_by([col("tick")])
             .agg([
                 col("max_wage").mean().alias("avg_bid"),
@@ -1262,10 +1656,22 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
             .unwrap();
         println!("\nBid wages by tick (first 30):");
         // Print all rows for the first 30 ticks
-        let ticks: Vec<u64> = bids_detail.column("tick").unwrap()
-            .u64().unwrap().into_iter().flatten().collect();
-        let bids: Vec<f64> = bids_detail.column("avg_bid").unwrap()
-            .f64().unwrap().into_iter().flatten().collect();
+        let ticks: Vec<u64> = bids_detail
+            .column("tick")
+            .unwrap()
+            .u64()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect();
+        let bids: Vec<f64> = bids_detail
+            .column("avg_bid")
+            .unwrap()
+            .f64()
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect();
         for (t, b) in ticks.iter().zip(bids.iter()).take(30) {
             let status = if *b < 0.5 { " ← BELOW MIN_WAGE" } else { "" };
             println!("  tick {:>2}: bid={:.3}{}", t, b, status);
@@ -1275,7 +1681,9 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
     // Q0f: Check worker asks (min_wage)
     println!("--- Q0f: WORKER ASKS ---\n");
     if let Some(labor_ask) = dfs.get("labor_ask") {
-        let asks_detail = labor_ask.clone().lazy()
+        let asks_detail = labor_ask
+            .clone()
+            .lazy()
             .group_by([col("tick")])
             .agg([
                 col("min_wage").mean().alias("avg_min_wage"),
@@ -1294,7 +1702,9 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
 
     if let (Some(assignment), Some(fill)) = (dfs.get("assignment"), dfs.get("fill")) {
         // Total wages paid per tick (money flows from merchant to pops)
-        let wages_out = assignment.clone().lazy()
+        let wages_out = assignment
+            .clone()
+            .lazy()
             .group_by([col("tick")])
             .agg([
                 col("wage").sum().alias("wages_paid"),
@@ -1305,8 +1715,14 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
             .unwrap();
 
         // Revenue from merchant sales per tick (money flows from pops to merchant)
-        let revenue_in = fill.clone().lazy()
-            .filter(col("agent_type").eq(lit("merchant")).and(col("side").eq(lit("sell"))))
+        let revenue_in = fill
+            .clone()
+            .lazy()
+            .filter(
+                col("agent_type")
+                    .eq(lit("merchant"))
+                    .and(col("side").eq(lit("sell"))),
+            )
             .with_column((col("price") * col("quantity")).alias("revenue"))
             .group_by([col("tick")])
             .agg([col("revenue").sum().alias("sales_revenue")])
@@ -1327,7 +1743,9 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
     println!("--- Q2: LABOR BIDS OVER TIME ---\n");
 
     if let Some(labor_bid) = dfs.get("labor_bid") {
-        let bids_summary = labor_bid.clone().lazy()
+        let bids_summary = labor_bid
+            .clone()
+            .lazy()
             .group_by([col("tick")])
             .agg([
                 col("max_wage").count().alias("num_bids"),
@@ -1348,7 +1766,9 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
     println!("--- Q3: ASSIGNMENTS OVER TIME ---\n");
 
     if let Some(assignment) = dfs.get("assignment") {
-        let assignments_summary = assignment.clone().lazy()
+        let assignments_summary = assignment
+            .clone()
+            .lazy()
             .group_by([col("tick")])
             .agg([
                 col("wage").count().alias("num_assignments"),
@@ -1367,7 +1787,9 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
     println!("--- Q4: LABOR SUPPLY (ASKS) OVER TIME ---\n");
 
     if let Some(labor_ask) = dfs.get("labor_ask") {
-        let asks_summary = labor_ask.clone().lazy()
+        let asks_summary = labor_ask
+            .clone()
+            .lazy()
             .group_by([col("tick")])
             .agg([
                 col("min_wage").count().alias("num_workers"),
@@ -1386,15 +1808,23 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
 
     if let (Some(assignment), Some(fill)) = (dfs.get("assignment"), dfs.get("fill")) {
         // Get wages per tick
-        let wages = assignment.clone().lazy()
+        let wages = assignment
+            .clone()
+            .lazy()
             .group_by([col("tick")])
             .agg([col("wage").sum().alias("wages_paid")])
             .collect()
             .unwrap();
 
         // Get revenue per tick
-        let revenue = fill.clone().lazy()
-            .filter(col("agent_type").eq(lit("merchant")).and(col("side").eq(lit("sell"))))
+        let revenue = fill
+            .clone()
+            .lazy()
+            .filter(
+                col("agent_type")
+                    .eq(lit("merchant"))
+                    .and(col("side").eq(lit("sell"))),
+            )
             .with_column((col("price") * col("quantity")).alias("revenue"))
             .group_by([col("tick")])
             .agg([col("revenue").sum().alias("sales_revenue")])
@@ -1402,8 +1832,14 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
             .unwrap();
 
         // Join and compute net flow
-        let cash_flow = wages.lazy()
-            .join(revenue.lazy(), [col("tick")], [col("tick")], JoinArgs::new(JoinType::Left))
+        let cash_flow = wages
+            .lazy()
+            .join(
+                revenue.lazy(),
+                [col("tick")],
+                [col("tick")],
+                JoinArgs::new(JoinType::Left),
+            )
             .with_column(col("sales_revenue").fill_null(lit(0.0)))
             .with_column((col("sales_revenue") - col("wages_paid")).alias("net_flow"))
             .sort(["tick"], Default::default())
@@ -1420,8 +1856,14 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
     println!("--- Q6: TRANSITION POINT (ticks 12-16) ---\n");
 
     if let Some(labor_bid) = dfs.get("labor_bid") {
-        let transition = labor_bid.clone().lazy()
-            .filter(col("tick").gt_eq(lit(12u64)).and(col("tick").lt_eq(lit(16u64))))
+        let transition = labor_bid
+            .clone()
+            .lazy()
+            .filter(
+                col("tick")
+                    .gt_eq(lit(12u64))
+                    .and(col("tick").lt_eq(lit(16u64))),
+            )
             .group_by([col("tick")])
             .agg([
                 col("max_wage").mean().alias("avg_bid"),
@@ -1440,8 +1882,14 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
     }
 
     if let Some(labor_ask) = dfs.get("labor_ask") {
-        let transition = labor_ask.clone().lazy()
-            .filter(col("tick").gt_eq(lit(12u64)).and(col("tick").lt_eq(lit(16u64))))
+        let transition = labor_ask
+            .clone()
+            .lazy()
+            .filter(
+                col("tick")
+                    .gt_eq(lit(12u64))
+                    .and(col("tick").lt_eq(lit(16u64))),
+            )
             .group_by([col("tick")])
             .agg([
                 col("min_wage").mean().alias("avg_ask"),
@@ -1460,7 +1908,9 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
 
     if let (Some(fill), Some(labor_bid)) = (dfs.get("fill"), dfs.get("labor_bid")) {
         // Get clearing prices per tick
-        let prices = fill.clone().lazy()
+        let prices = fill
+            .clone()
+            .lazy()
             .group_by([col("tick")])
             .agg([col("price").max().alias("goods_price")])
             .sort(["tick"], Default::default())
@@ -1468,7 +1918,9 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
             .unwrap();
 
         // Get MVP per tick
-        let mvps = labor_bid.clone().lazy()
+        let _mvps = labor_bid
+            .clone()
+            .lazy()
             .group_by([col("tick")])
             .agg([col("mvp").mean().alias("avg_mvp")])
             .sort(["tick"], Default::default())
@@ -1486,8 +1938,14 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
 
     if let Some(order) = dfs.get("order") {
         // Check merchant sell orders around the transition
-        let merchant_sells = order.clone().lazy()
-            .filter(col("agent_type").eq(lit("merchant")).and(col("side").eq(lit("sell"))))
+        let merchant_sells = order
+            .clone()
+            .lazy()
+            .filter(
+                col("agent_type")
+                    .eq(lit("merchant"))
+                    .and(col("side").eq(lit("sell"))),
+            )
             .group_by([col("tick")])
             .agg([
                 col("quantity").sum().alias("offered_qty"),
@@ -1501,7 +1959,7 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
         println!("{}\n", merchant_sells);
 
         // Check what ticks have NO merchant sell orders
-        let all_ticks: Vec<u64> = (1..=20).collect();
+        let _all_ticks: Vec<u64> = (1..=20).collect();
         println!("Merchant sell orders stop after tick 13.");
         println!("Does merchant have stockpile but isn't selling? Let's check production_io.\n");
     }
@@ -1510,7 +1968,9 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
     if let Some(prod_io) = dfs.get("production_io") {
         println!("Production IO schema: {:?}\n", prod_io.schema());
 
-        let outputs = prod_io.clone().lazy()
+        let outputs = prod_io
+            .clone()
+            .lazy()
             .group_by([col("tick")])
             .agg([col("quantity").sum().alias("total_io")])
             .sort(["tick"], Default::default())
@@ -1525,16 +1985,28 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
     println!("--- Q9: OFFERED vs FILLED ---\n");
 
     if let (Some(order), Some(fill)) = (dfs.get("order"), dfs.get("fill")) {
-        let offered = order.clone().lazy()
-            .filter(col("agent_type").eq(lit("merchant")).and(col("side").eq(lit("sell"))))
+        let offered = order
+            .clone()
+            .lazy()
+            .filter(
+                col("agent_type")
+                    .eq(lit("merchant"))
+                    .and(col("side").eq(lit("sell"))),
+            )
             .group_by([col("tick")])
             .agg([col("quantity").sum().alias("offered")])
             .sort(["tick"], Default::default())
             .collect()
             .unwrap();
 
-        let filled = fill.clone().lazy()
-            .filter(col("agent_type").eq(lit("merchant")).and(col("side").eq(lit("sell"))))
+        let filled = fill
+            .clone()
+            .lazy()
+            .filter(
+                col("agent_type")
+                    .eq(lit("merchant"))
+                    .and(col("side").eq(lit("sell"))),
+            )
             .group_by([col("tick")])
             .agg([col("quantity").sum().alias("sold")])
             .sort(["tick"], Default::default())
@@ -1542,8 +2014,14 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
             .unwrap();
 
         // Join them
-        let comparison = offered.lazy()
-            .join(filled.lazy(), [col("tick")], [col("tick")], JoinArgs::new(JoinType::Left))
+        let comparison = offered
+            .lazy()
+            .join(
+                filled.lazy(),
+                [col("tick")],
+                [col("tick")],
+                JoinArgs::new(JoinType::Left),
+            )
             .with_column(col("sold").fill_null(lit(0.0)))
             .collect()
             .unwrap();
@@ -1560,23 +2038,36 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
 
     // Compare production vs fills
     if let (Some(prod_io), Some(fill)) = (dfs.get("production_io"), dfs.get("fill")) {
-
         // Total produced (outputs only)
-        let produced = prod_io.clone().lazy()
+        let produced = prod_io
+            .clone()
+            .lazy()
             .filter(col("direction").eq(lit("output")))
             .select([col("quantity").sum().alias("total_produced")])
             .collect()
             .unwrap();
 
         // Total bought by pops (should equal total sold by merchant)
-        let pop_bought = fill.clone().lazy()
-            .filter(col("agent_type").eq(lit("pop")).and(col("side").eq(lit("buy"))))
+        let pop_bought = fill
+            .clone()
+            .lazy()
+            .filter(
+                col("agent_type")
+                    .eq(lit("pop"))
+                    .and(col("side").eq(lit("buy"))),
+            )
             .select([col("quantity").sum().alias("pop_bought")])
             .collect()
             .unwrap();
 
-        let merchant_sold = fill.clone().lazy()
-            .filter(col("agent_type").eq(lit("merchant")).and(col("side").eq(lit("sell"))))
+        let merchant_sold = fill
+            .clone()
+            .lazy()
+            .filter(
+                col("agent_type")
+                    .eq(lit("merchant"))
+                    .and(col("side").eq(lit("sell"))),
+            )
             .select([col("quantity").sum().alias("merchant_sold")])
             .collect()
             .unwrap();
@@ -1593,6 +2084,7 @@ fn analyze_currency_flow(dfs: &std::collections::HashMap<String, polars::prelude
     }
 }
 
+#[allow(dead_code)]
 fn analyze_death_spiral(dfs: &std::collections::HashMap<String, polars::prelude::DataFrame>) {
     use polars::prelude::*;
 
@@ -1605,7 +2097,9 @@ fn analyze_death_spiral(dfs: &std::collections::HashMap<String, polars::prelude:
 
     if let (Some(assignment), Some(fill)) = (dfs.get("assignment"), dfs.get("fill")) {
         // Wages paid per tick
-        let wages_per_tick = assignment.clone().lazy()
+        let wages_per_tick = assignment
+            .clone()
+            .lazy()
             .group_by([col("tick")])
             .agg([
                 col("wage").sum().alias("total_wages"),
@@ -1616,8 +2110,14 @@ fn analyze_death_spiral(dfs: &std::collections::HashMap<String, polars::prelude:
             .unwrap();
 
         // Pop spending per tick (buys only)
-        let pop_spending = fill.clone().lazy()
-            .filter(col("agent_type").eq(lit("pop")).and(col("side").eq(lit("buy"))))
+        let pop_spending = fill
+            .clone()
+            .lazy()
+            .filter(
+                col("agent_type")
+                    .eq(lit("pop"))
+                    .and(col("side").eq(lit("buy"))),
+            )
             .with_column((col("price") * col("quantity")).alias("cost"))
             .group_by([col("tick")])
             .agg([
@@ -1642,11 +2142,15 @@ fn analyze_death_spiral(dfs: &std::collections::HashMap<String, polars::prelude:
     // === Q2: Food Balance - Where does the grain go? ===
     println!("--- Q2: FOOD BALANCE (Where does the grain go?) ---\n");
 
-    if let (Some(production_io), Some(consumption), Some(fill)) =
-        (dfs.get("production_io"), dfs.get("consumption"), dfs.get("fill"))
-    {
+    if let (Some(production_io), Some(consumption), Some(fill)) = (
+        dfs.get("production_io"),
+        dfs.get("consumption"),
+        dfs.get("fill"),
+    ) {
         // Production per tick
-        let production = production_io.clone().lazy()
+        let production = production_io
+            .clone()
+            .lazy()
             .filter(col("direction").eq(lit("output")))
             .group_by([col("tick")])
             .agg([col("quantity").sum().alias("produced")])
@@ -1655,7 +2159,9 @@ fn analyze_death_spiral(dfs: &std::collections::HashMap<String, polars::prelude:
             .unwrap();
 
         // Consumption per tick
-        let consumed = consumption.clone().lazy()
+        let consumed = consumption
+            .clone()
+            .lazy()
             .group_by([col("tick")])
             .agg([
                 col("actual").sum().alias("consumed"),
@@ -1666,7 +2172,9 @@ fn analyze_death_spiral(dfs: &std::collections::HashMap<String, polars::prelude:
             .unwrap();
 
         // Merchant sales per tick
-        let merchant_sales = fill.clone().lazy()
+        let merchant_sales = fill
+            .clone()
+            .lazy()
             .filter(col("agent_type").eq(lit("merchant")))
             .group_by([col("tick")])
             .agg([col("quantity").sum().alias("merchant_sold")])
@@ -1691,7 +2199,9 @@ fn analyze_death_spiral(dfs: &std::collections::HashMap<String, polars::prelude:
     println!("--- Q3: MARKET CLEARING (Why are prices so high?) ---\n");
 
     if let Some(fill) = dfs.get("fill") {
-        let clearing_prices = fill.clone().lazy()
+        let clearing_prices = fill
+            .clone()
+            .lazy()
             .group_by([col("tick")])
             .agg([
                 col("price").max().alias("clearing_price"),
@@ -1711,7 +2221,9 @@ fn analyze_death_spiral(dfs: &std::collections::HashMap<String, polars::prelude:
     println!("--- Q4: MERCHANT SUPPLY (Is merchant holding back?) ---\n");
 
     if let Some(order) = dfs.get("order") {
-        let merchant_orders = order.clone().lazy()
+        let merchant_orders = order
+            .clone()
+            .lazy()
             .filter(col("agent_type").eq(lit("merchant")))
             .group_by([col("tick")])
             .agg([
@@ -1727,8 +2239,14 @@ fn analyze_death_spiral(dfs: &std::collections::HashMap<String, polars::prelude:
         println!("{}\n", merchant_orders);
 
         // Show first tick's merchant orders in detail
-        let tick1_merchant = order.clone().lazy()
-            .filter(col("agent_type").eq(lit("merchant")).and(col("tick").eq(lit(1u64))))
+        let tick1_merchant = order
+            .clone()
+            .lazy()
+            .filter(
+                col("agent_type")
+                    .eq(lit("merchant"))
+                    .and(col("tick").eq(lit(1u64))),
+            )
             .select([col("limit_price"), col("quantity")])
             .sort(["limit_price"], Default::default())
             .collect()
@@ -1746,23 +2264,31 @@ fn analyze_death_spiral(dfs: &std::collections::HashMap<String, polars::prelude:
 
     if let (Some(order), Some(fill)) = (dfs.get("order"), dfs.get("fill")) {
         // Total pop demand (orders)
-        let pop_demand = order.clone().lazy()
-            .filter(col("agent_type").eq(lit("pop")).and(col("side").eq(lit("buy"))))
+        let pop_demand = order
+            .clone()
+            .lazy()
+            .filter(
+                col("agent_type")
+                    .eq(lit("pop"))
+                    .and(col("side").eq(lit("buy"))),
+            )
             .group_by([col("tick")])
-            .agg([
-                col("quantity").sum().alias("wanted"),
-            ])
+            .agg([col("quantity").sum().alias("wanted")])
             .sort(["tick"], Default::default())
             .collect()
             .unwrap();
 
         // Actual pop purchases
-        let pop_bought = fill.clone().lazy()
-            .filter(col("agent_type").eq(lit("pop")).and(col("side").eq(lit("buy"))))
+        let pop_bought = fill
+            .clone()
+            .lazy()
+            .filter(
+                col("agent_type")
+                    .eq(lit("pop"))
+                    .and(col("side").eq(lit("buy"))),
+            )
             .group_by([col("tick")])
-            .agg([
-                col("quantity").sum().alias("got"),
-            ])
+            .agg([col("quantity").sum().alias("got")])
             .sort(["tick"], Default::default())
             .collect()
             .unwrap();
@@ -1781,7 +2307,9 @@ fn analyze_death_spiral(dfs: &std::collections::HashMap<String, polars::prelude:
     println!("--- Q6: MORTALITY TIMELINE ---\n");
 
     if let Some(mortality) = dfs.get("mortality") {
-        let mortality_summary = mortality.clone().lazy()
+        let mortality_summary = mortality
+            .clone()
+            .lazy()
             .group_by([col("tick"), col("outcome")])
             .agg([col("pop_id").count().alias("count")])
             .sort(["tick", "outcome"], Default::default())
@@ -1792,7 +2320,9 @@ fn analyze_death_spiral(dfs: &std::collections::HashMap<String, polars::prelude:
         println!("{}\n", mortality_summary);
 
         // Average food satisfaction per tick
-        let satisfaction = mortality.clone().lazy()
+        let satisfaction = mortality
+            .clone()
+            .lazy()
             .group_by([col("tick")])
             .agg([
                 col("food_satisfaction").mean().alias("avg_satisfaction"),
@@ -1811,7 +2341,9 @@ fn analyze_death_spiral(dfs: &std::collections::HashMap<String, polars::prelude:
 
     if let Some(order) = dfs.get("order") {
         // Check if orders exist after tick 13
-        let orders_by_tick = order.clone().lazy()
+        let orders_by_tick = order
+            .clone()
+            .lazy()
             .group_by([col("tick"), col("agent_type"), col("side")])
             .agg([
                 col("quantity").sum().alias("total_qty"),
@@ -1823,8 +2355,14 @@ fn analyze_death_spiral(dfs: &std::collections::HashMap<String, polars::prelude:
             .unwrap();
 
         // Show ticks 10-20 to see what happens around the stoppage
-        let filtered = orders_by_tick.clone().lazy()
-            .filter(col("tick").gt_eq(lit(10u64)).and(col("tick").lt_eq(lit(20u64))))
+        let filtered = orders_by_tick
+            .clone()
+            .lazy()
+            .filter(
+                col("tick")
+                    .gt_eq(lit(10u64))
+                    .and(col("tick").lt_eq(lit(20u64))),
+            )
             .collect()
             .unwrap();
 
@@ -1832,16 +2370,28 @@ fn analyze_death_spiral(dfs: &std::collections::HashMap<String, polars::prelude:
         println!("{}\n", filtered);
 
         // Check price overlap: do pop bids meet merchant asks?
-        let pop_bids = order.clone().lazy()
-            .filter(col("agent_type").eq(lit("pop")).and(col("side").eq(lit("buy"))))
+        let pop_bids = order
+            .clone()
+            .lazy()
+            .filter(
+                col("agent_type")
+                    .eq(lit("pop"))
+                    .and(col("side").eq(lit("buy"))),
+            )
             .group_by([col("tick")])
             .agg([col("limit_price").max().alias("max_bid")])
             .sort(["tick"], Default::default())
             .collect()
             .unwrap();
 
-        let merchant_asks = order.clone().lazy()
-            .filter(col("agent_type").eq(lit("merchant")).and(col("side").eq(lit("sell"))))
+        let merchant_asks = order
+            .clone()
+            .lazy()
+            .filter(
+                col("agent_type")
+                    .eq(lit("merchant"))
+                    .and(col("side").eq(lit("sell"))),
+            )
             .group_by([col("tick")])
             .agg([col("limit_price").min().alias("min_ask")])
             .sort(["tick"], Default::default())
@@ -1859,7 +2409,9 @@ fn analyze_death_spiral(dfs: &std::collections::HashMap<String, polars::prelude:
 
     // Check production timeline
     if let Some(production) = dfs.get("production") {
-        let prod_by_tick = production.clone().lazy()
+        let prod_by_tick = production
+            .clone()
+            .lazy()
             .group_by([col("tick")])
             .agg([col("runs").sum().alias("total_runs")])
             .sort(["tick"], Default::default())

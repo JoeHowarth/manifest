@@ -365,9 +365,7 @@ pub fn run_settlement_tick(
             let inv: HashMap<GoodId, f64> = m
                 .stockpiles
                 .get(&settlement)
-                .map(|stockpile| {
-                    good_ids.iter().map(|&g| (g, stockpile.get(g))).collect()
-                })
+                .map(|stockpile| good_ids.iter().map(|&g| (g, stockpile.get(g))).collect())
                 .unwrap_or_default();
             (m.id.0, inv)
         }))

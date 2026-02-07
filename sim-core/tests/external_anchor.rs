@@ -7,7 +7,11 @@ use sim_core::{
 
 const GRAIN: GoodId = 1;
 
-fn make_anchor_config(settlement: SettlementId, enabled: bool, base_depth: f64) -> ExternalMarketConfig {
+fn make_anchor_config(
+    settlement: SettlementId,
+    enabled: bool,
+    base_depth: f64,
+) -> ExternalMarketConfig {
     let mut config = ExternalMarketConfig::default();
     config.anchors.insert(
         GRAIN,

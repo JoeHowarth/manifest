@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use sim_core::{
     AnchoredGoodConfig, ExternalMarketConfig, GoodId, GoodProfile, Need, NeedContribution,
     OutsideFlowTotals, Pop, PopId, Price, Recipe, SettlementFriction, SettlementId,
-    SubsistenceReservationConfig, UtilityCurve, World, labor::SkillId,
+    SubsistenceReservationConfig, UtilityCurve, World,
+    labor::SkillId,
     production::{FacilityType, RecipeId},
     run_settlement_tick,
 };
@@ -184,7 +185,11 @@ fn invariant_labor_assignment_accounting_consistent() {
     for _ in 0..80 {
         world.run_tick(&good_profiles, &needs, &recipes);
 
-        let employed_now = world.pops.values().filter(|p| p.employed_at.is_some()).count();
+        let employed_now = world
+            .pops
+            .values()
+            .filter(|p| p.employed_at.is_some())
+            .count();
         let workers_in_facilities: usize = world
             .facilities
             .values()
