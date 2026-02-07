@@ -109,12 +109,19 @@ Topology note:
 ### 3e) Market clearing and fill application
 
 1. Clear all goods using iterative multi-market call auction.
+   - Uses seller-favoring tie breaks by default.
+   - When outside ladders are active, tie-breaks adapt by local imbalance:
+     shortage -> buyer-favoring, surplus -> seller-favoring, near-balance -> neutral.
 2. Apply fills to pops and merchants (currency + stocks).
 3. Track external import/export fills when outside agents trade.
 
 ### 3f) Price EMA update
 
-- Clearing prices smooth into settlement price EMA with 0.7/0.3 blend.
+- Local clearing prices smooth into settlement price EMA with 0.7/0.3 blend.
+- For anchored goods, external world reference contributes as a bounded secondary signal:
+  it nudges EMA toward world price but cannot dominate local clearing.
+- On no-local-trade ticks for anchored goods, EMA still drifts modestly toward world
+  reference to avoid staleness.
 
 ## Phase 4: Mortality and Growth
 

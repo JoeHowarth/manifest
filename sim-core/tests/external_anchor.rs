@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use sim_core::tick::PRICE_EMA_ALPHA;
 use sim_core::{
     AnchoredGoodConfig, ExternalMarketConfig, GoodId, GoodProfile, Need, OutsideFlowTotals, Pop,
     PopId, Price, SettlementFriction, SettlementId, run_settlement_tick,
@@ -243,4 +244,115 @@ fn no_external_flow_when_disabled() {
 
     assert_eq!(imported, 0.0);
     assert_eq!(exported, 0.0);
+}
+
+#[test]
+fn external_anchor_influences_price_ema_but_local_clear_dominates() {
+    let settlement = SettlementId::new(0);
+    let config = make_anchor_config(settlement, true, 30.0);
+    let (good_profiles, needs) = base_profiles_and_needs();
+
+    let initial_ema = 20.0;
+    let mut price_ema: HashMap<GoodId, Price> = HashMap::new();
+    price_ema.insert(GRAIN, initial_ema);
+
+    let mut buyer = Pop::new(PopId::new(1), settlement);
+    buyer.currency = 50_000.0;
+    buyer.income_ema = 50_000.0;
+    buyer.stocks.insert(GRAIN, 0.0);
+    buyer.desired_consumption_ema.insert(GRAIN, 25.0);
+
+    let mut pops: Vec<&mut Pop> = vec![&mut buyer];
+    let mut merchants = Vec::new();
+
+    let result = run_settlement_tick(
+        1,
+        settlement,
+        &mut pops,
+        &mut merchants,
+        &good_profiles,
+        &needs,
+        &mut price_ema,
+        Some(&config),
+        None,
+        None,
+    );
+
+    let local_price = result
+        .clearing_prices
+        .get(&GRAIN)
+        .copied()
+        .expect("expected anchored grain trade");
+    let next_ema = *price_ema.get(&GRAIN).expect("grain EMA should exist");
+    let world = config
+        .anchors
+        .get(&GRAIN)
+        .expect("anchor config missing grain")
+        .world_price;
+
+    let local_only = (1.0 - PRICE_EMA_ALPHA) * initial_ema + PRICE_EMA_ALPHA * local_price;
+    let world_only = (1.0 - PRICE_EMA_ALPHA) * initial_ema + PRICE_EMA_ALPHA * world;
+
+    assert!(
+        next_ema <= local_only + 1e-6,
+        "external influence should pull toward world, not away: ema={next_ema:.4}, local_only={local_only:.4}"
+    );
+    assert!(
+        next_ema >= world_only - 1e-6,
+        "external influence must remain bounded and local-dominant: ema={next_ema:.4}, world_only={world_only:.4}"
+    );
+}
+
+#[test]
+fn anchored_no_trade_tick_still_moves_ema_toward_world() {
+    let settlement = SettlementId::new(0);
+    let config = make_anchor_config(settlement, true, 30.0);
+    let (good_profiles, needs) = base_profiles_and_needs();
+
+    let initial_ema = 20.0;
+    let mut price_ema: HashMap<GoodId, Price> = HashMap::new();
+    price_ema.insert(GRAIN, initial_ema);
+
+    let mut idle_pop = Pop::new(PopId::new(1), settlement);
+    idle_pop.currency = 0.0;
+    idle_pop.income_ema = 0.0;
+    idle_pop.stocks.insert(GRAIN, 0.0);
+    idle_pop.desired_consumption_ema.insert(GRAIN, 0.0);
+
+    let mut pops: Vec<&mut Pop> = vec![&mut idle_pop];
+    let mut merchants = Vec::new();
+
+    let result = run_settlement_tick(
+        1,
+        settlement,
+        &mut pops,
+        &mut merchants,
+        &good_profiles,
+        &needs,
+        &mut price_ema,
+        Some(&config),
+        None,
+        None,
+    );
+
+    assert!(
+        !result.clearing_prices.contains_key(&GRAIN),
+        "expected no local grain trade"
+    );
+
+    let next_ema = *price_ema.get(&GRAIN).expect("grain EMA should exist");
+    let world = config
+        .anchors
+        .get(&GRAIN)
+        .expect("anchor config missing grain")
+        .world_price;
+
+    assert!(
+        next_ema < initial_ema,
+        "anchored no-trade EMA should move toward world: next={next_ema:.4}, initial={initial_ema:.4}"
+    );
+    assert!(
+        next_ema > world,
+        "anchored no-trade EMA influence should be bounded: next={next_ema:.4}, world={world:.4}"
+    );
 }

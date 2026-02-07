@@ -4,53 +4,53 @@
   "trials": [
     {
       "seed": 3,
-      "final_price": 1.824769615766107e-7,
-      "tail_price_mean": 5.527413934426976e-6,
-      "tail_price_std": 6.956854543248419e-6,
-      "tail_trade_value_mean": 0.000018744447200122692,
-      "final_pop_currency_total": 152.16890418722244,
-      "final_merchant_stock": 249.9936668210026
+      "final_price": 0.2542539337105838,
+      "tail_price_mean": 0.37994840881393044,
+      "tail_price_std": 0.05997130618233683,
+      "tail_trade_value_mean": 1.5591391512402757,
+      "final_pop_currency_total": 101.98721261606724,
+      "final_merchant_stock": 249.85606886337496
     },
     {
       "seed": 7,
-      "final_price": 1.7682537083780102e-7,
-      "tail_price_mean": 5.356221466449256e-6,
-      "tail_price_std": 6.741390112187281e-6,
-      "tail_trade_value_mean": 0.000018754555637209796,
-      "final_pop_currency_total": 150.57631915568263,
-      "final_merchant_stock": 276.3113732335708
+      "final_price": 0.3677682374042349,
+      "tail_price_mean": 0.3926492617981723,
+      "tail_price_std": 0.049428387909187466,
+      "tail_trade_value_mean": 1.6296194603322571,
+      "final_pop_currency_total": 98.48983870105141,
+      "final_merchant_stock": 275.55858980587215
     },
     {
       "seed": 19,
-      "final_price": 2.6051503622639174e-7,
-      "tail_price_mean": 7.891267088864534e-6,
-      "tail_price_std": 9.932022090334952e-6,
-      "tail_trade_value_mean": 0.000027358829127425704,
-      "final_pop_currency_total": 152.30428862683726,
-      "final_merchant_stock": 248.75459286649252
+      "final_price": 0.40733703131641064,
+      "tail_price_mean": 0.3887912547449464,
+      "tail_price_std": 0.05491600651688305,
+      "tail_trade_value_mean": 1.6240691779771737,
+      "final_pop_currency_total": 102.15467651726199,
+      "final_merchant_stock": 249.11422481256528
     },
     {
       "seed": 42,
-      "final_price": 2.20044146497151e-7,
-      "tail_price_mean": 6.6653624163223695e-6,
-      "tail_price_std": 8.38908707733623e-6,
-      "tail_trade_value_mean": 0.000023489237346966315,
-      "final_pop_currency_total": 158.1802655578535,
-      "final_merchant_stock": 238.44321955275606
+      "final_price": 0.5048880755392483,
+      "tail_price_mean": 0.3720169048286636,
+      "tail_price_std": 0.06950950411387151,
+      "tail_trade_value_mean": 1.5494809993189116,
+      "final_pop_currency_total": 110.80964210828498,
+      "final_merchant_stock": 239.64114242290245
     },
     {
       "seed": 2026,
-      "final_price": 2.0854247850009522e-7,
-      "tail_price_mean": 6.316965120538883e-6,
-      "tail_price_std": 7.950591003262468e-6,
-      "tail_trade_value_mean": 0.000021420792641121845,
-      "final_pop_currency_total": 140.97867034567972,
-      "final_merchant_stock": 239.3144235262624
+      "final_price": 0.3579562542145369,
+      "tail_price_mean": 0.36396103664428253,
+      "tail_price_std": 0.06540326416615347,
+      "tail_trade_value_mean": 1.4948155996725423,
+      "final_pop_currency_total": 93.15734726047346,
+      "final_merchant_stock": 241.82147099821768
     }
   ],
   "aggregate": {
-    "avg_final_price": 2.0968079872760992e-7,
-    "avg_tail_price_std": 7.99398896527387e-6,
-    "avg_tail_trade_value": 0.00002195357239056927
+    "avg_final_price": 0.37844070643700295,
+    "avg_tail_price_std": 0.05984569377768647,
+    "avg_tail_trade_value": 1.5714248777082322
   }
 }

@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
 use sim_core::{
+    AnchoredGoodConfig, ExternalMarketConfig, GoodId, GoodProfile, Need, NeedContribution,
+    OutsideFlowTotals, Pop, PopId, Price, Recipe, SettlementFriction, SettlementId,
+    SubsistenceReservationConfig, UtilityCurve, World,
     labor::SkillId,
     production::{FacilityType, RecipeId},
-    run_settlement_tick, AnchoredGoodConfig, ExternalMarketConfig, GoodId, GoodProfile, Need,
-    NeedContribution, OutsideFlowTotals, Pop, PopId, Price, Recipe, SettlementFriction,
-    SettlementId, SubsistenceReservationConfig, UtilityCurve, World,
+    run_settlement_tick,
 };
 
 const GRAIN: GoodId = 1;
@@ -173,13 +174,12 @@ fn invariant_labor_assignment_accounting_consistent() {
         },
     );
 
-    let recipes =
-        vec![
-            sim_core::Recipe::new(RecipeId::new(1), "Grain Farming", vec![FacilityType::Farm])
-                .with_capacity_cost(1)
-                .with_worker(LABORER, 1)
-                .with_output(GRAIN, 1.0),
-        ];
+    let recipes = vec![
+        sim_core::Recipe::new(RecipeId::new(1), "Grain Farming", vec![FacilityType::Farm])
+            .with_capacity_cost(1)
+            .with_worker(LABORER, 1)
+            .with_output(GRAIN, 1.0),
+    ];
 
     let initial_pop_count = world.pops.len();
     for _ in 0..80 {
@@ -418,9 +418,8 @@ fn invariant_closed_economy_tick_residual_near_zero() {
         },
     );
 
-    let recipes =
-        vec![
-            sim_core::Recipe::new(RecipeId::new(1), "Grain Farming", vec![FacilityType::Farm])
+    let recipes = vec![
+        sim_core::Recipe::new(RecipeId::new(1), "Grain Farming", vec![FacilityType::Farm])
             .with_capacity_cost(1)
             .with_worker(LABORER, 1)
             .with_output(GRAIN, 2.0),

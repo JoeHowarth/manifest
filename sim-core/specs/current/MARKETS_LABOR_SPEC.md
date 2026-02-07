@@ -42,6 +42,12 @@ Per good:
 3. Pick max-volume price (bias can favor sellers or buyers at ties).
 4. Allocate fills proportionally within price levels.
 
+Tie-break policy in current runtime:
+- Default goods clearing uses seller-favoring ties.
+- When outside anchor ladders are active, goods tie-breaks are regime-aware:
+  shortage -> buyer-favoring (import-cap preserving), surplus -> seller-favoring
+  (export-floor preserving), near-balance -> neutral.
+
 Multi-good clearing:
 
 1. Clear each good.
@@ -131,6 +137,8 @@ Effects:
 
 1. Softly bounds local prices via arbitrage-like outside opportunities.
 2. Allows explicit currency/goods flow against external side.
+3. Outside world price can influence goods `price_ema` as a bounded secondary signal
+   (local clearing remains primary; influence is capped and liquidity-scaled).
 
 ## Operational Differences from Legacy Specs
 

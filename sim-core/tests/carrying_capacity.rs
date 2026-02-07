@@ -78,7 +78,9 @@ fn run_subsistence_only_trial(initial_pop: usize, ticks: usize) -> Vec<f64> {
     });
 
     for _ in 0..initial_pop {
-        let pop_id = world.add_pop(settlement).expect("pop insertion should succeed");
+        let pop_id = world
+            .add_pop(settlement)
+            .expect("pop insertion should succeed");
         let pop = world.get_pop_mut(pop_id).expect("pop must exist");
         pop.currency = 0.0;
         pop.income_ema = 0.0;
@@ -161,9 +163,7 @@ fn population_converges_to_constant_carrying_capacity_across_initial_sweep() {
     let means_only: Vec<f64> = scenario_tail_means.iter().map(|(_, m)| *m).collect();
     let sweep_center = mean(&means_only);
     let sweep_min = means_only.iter().fold(f64::INFINITY, |a, b| a.min(*b));
-    let sweep_max = means_only
-        .iter()
-        .fold(f64::NEG_INFINITY, |a, b| a.max(*b));
+    let sweep_max = means_only.iter().fold(f64::NEG_INFINITY, |a, b| a.max(*b));
     let sweep_band = sweep_max - sweep_min;
 
     // "Constant carrying capacity" across wide initial-condition sweep:

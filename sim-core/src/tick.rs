@@ -16,6 +16,10 @@ pub const BUFFER_TICKS: f64 = 5.0;
 pub const PRICE_SWEEP_MIN: f64 = 0.6;
 pub const PRICE_SWEEP_MAX: f64 = 1.4;
 pub const PRICE_SWEEP_POINTS: usize = 9;
+pub const PRICE_EMA_ALPHA: f64 = 0.3;
+pub const EXTERNAL_EMA_WEIGHT_MAX: f64 = 0.2;
+pub const EXTERNAL_EMA_WEIGHT_NO_TRADE_MAX: f64 = 0.35;
+pub const EXTERNAL_EMA_DEPTH_HALF_SATURATION: f64 = 20.0;
 
 // === DEMAND CURVE FUNCTIONS ===
 
@@ -35,6 +39,60 @@ pub fn qty_norm(norm_p: f64, norm_c: f64) -> f64 {
 /// Inverts both inputs to reuse qty_norm logic for supply curve.
 pub fn qty_sell(norm_p: f64, norm_c: f64) -> f64 {
     qty_norm(1.0 / norm_p, 1.0 / norm_c)
+}
+
+fn anchored_external_ref_and_weight(
+    settlement: SettlementId,
+    pop_count: usize,
+    good: GoodId,
+    current_ema: Price,
+    local_price: Option<Price>,
+    external_market: Option<&ExternalMarketConfig>,
+    no_local_trade: bool,
+) -> Option<(Price, f64)> {
+    let config = external_market?;
+    let friction = config.friction_for(settlement);
+    if !friction.enabled {
+        return None;
+    }
+
+    let anchor = config.anchors.get(&good)?;
+    if anchor.world_price <= 0.0 {
+        return None;
+    }
+    let band =
+        (anchor.spread_bps + friction.transport_bps + friction.tariff_bps + friction.risk_bps)
+            / 10_000.0;
+    let import_edge = anchor.world_price * (1.0 + band);
+    let export_edge = (anchor.world_price * (1.0 - band)).max(0.0001);
+    let midpoint = 0.5 * (import_edge + export_edge);
+
+    let ext_ref = if let Some(local) = local_price {
+        if local >= midpoint {
+            import_edge
+        } else {
+            export_edge
+        }
+    } else if current_ema >= midpoint {
+        import_edge
+    } else {
+        export_edge
+    };
+
+    let depth = (anchor.base_depth + anchor.depth_per_pop * pop_count as f64).max(0.0);
+    let depth_signal = if depth <= 0.0 {
+        0.0
+    } else {
+        depth / (depth + EXTERNAL_EMA_DEPTH_HALF_SATURATION)
+    };
+    let max_weight = if no_local_trade {
+        EXTERNAL_EMA_WEIGHT_NO_TRADE_MAX
+    } else {
+        EXTERNAL_EMA_WEIGHT_MAX
+    };
+    let weight = (max_weight * depth_signal).clamp(0.0, max_weight);
+
+    Some((ext_ref, weight))
 }
 
 // === ORDER GENERATION ===
@@ -151,7 +209,7 @@ Update Price and Income EMA
 /// Run a market tick for a single settlement.
 /// Pops at this settlement participate in consumption and trading.
 /// Merchants with presence at this settlement participate in trading.
-#[allow(unused_variables)]
+#[allow(unused_variables, clippy::too_many_arguments)]
 pub fn run_settlement_tick(
     tick: u64,
     settlement: SettlementId,
@@ -381,9 +439,23 @@ pub fn run_settlement_tick(
     let price_bias = if outside_market.roles.is_empty() {
         market::PriceBias::FavorSellers
     } else {
-        // When outside anchor ladders are present, favor lower-price tie breaks
-        // so import asks can cap shortage spikes in the expected arbitrage band.
-        market::PriceBias::FavorBuyers
+        // With outside ladders active, adapt tie breaks to local imbalance:
+        // shortage -> favor buyers (import-cap preserving), surplus -> favor
+        // sellers (export-floor preserving), near-balance -> neutral.
+        let (inside_buy, inside_sell) = all_orders
+            .iter()
+            .filter(|o| !outside_market.roles.contains_key(&o.agent_id))
+            .fold((0.0, 0.0), |(b, s), o| match o.side {
+                Side::Buy => (b + o.quantity, s),
+                Side::Sell => (b, s + o.quantity),
+            });
+        if inside_buy > inside_sell + 1e-12 {
+            market::PriceBias::FavorBuyers
+        } else if inside_sell > inside_buy + 1e-12 {
+            market::PriceBias::FavorSellers
+        } else {
+            market::PriceBias::Neutral
+        }
     };
 
     let result = market::clear_multi_market(
@@ -468,9 +540,45 @@ pub fn run_settlement_tick(
     }
 
     // 6. UPDATE PRICE EMA
-    for (good, price) in &result.clearing_prices {
-        let ema = price_ema.entry(*good).or_insert(*price);
-        *ema = 0.7 * *ema + 0.3 * price;
+    for &good in &good_ids {
+        let local_price = result.clearing_prices.get(&good).copied();
+        let no_local_trade = local_price.is_none();
+
+        let ema = if let Some(p) = local_price {
+            price_ema.entry(good).or_insert(p)
+        } else {
+            price_ema.entry(good).or_insert(1.0)
+        };
+
+        let observed_price = if let Some(local) = local_price {
+            if let Some((ext_ref, w_ext)) = anchored_external_ref_and_weight(
+                settlement,
+                pops.len(),
+                good,
+                *ema,
+                Some(local),
+                external_market,
+                false,
+            ) {
+                (1.0 - w_ext) * local + w_ext * ext_ref
+            } else {
+                local
+            }
+        } else if let Some((ext_ref, w_ext)) = anchored_external_ref_and_weight(
+            settlement,
+            pops.len(),
+            good,
+            *ema,
+            None,
+            external_market,
+            no_local_trade,
+        ) {
+            (1.0 - w_ext) * *ema + w_ext * ext_ref
+        } else {
+            *ema
+        };
+
+        *ema = (1.0 - PRICE_EMA_ALPHA) * *ema + PRICE_EMA_ALPHA * observed_price;
     }
 
     result

@@ -12,6 +12,7 @@ pub enum PriceBias {
     #[default]
     FavorSellers, // highest price at max volume
     FavorBuyers, // lowest price at max volume
+    Neutral,     // midpoint-oriented tie break at max volume
 }
 
 pub struct MarketClearResult {
@@ -66,11 +67,13 @@ pub fn clear_single_market(
         .map(|o| o.limit_price)
         .chain(sells.iter().map(|o| o.limit_price))
         .collect();
-    match bias {
-        PriceBias::FavorSellers => price_points.sort_by(|a, b| b.partial_cmp(a).unwrap()),
-        PriceBias::FavorBuyers => price_points.sort_by(|a, b| a.partial_cmp(b).unwrap()),
-    }
+    // Keep canonical ascending order for deterministic tie handling.
+    price_points.sort_by(|a, b| a.partial_cmp(b).unwrap());
     price_points.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+    let tie_midpoint = match (price_points.first(), price_points.last()) {
+        (Some(lo), Some(hi)) => (lo + hi) * 0.5,
+        _ => 0.0,
+    };
 
     for price in price_points {
         // Demand at this price: aggregate by agent first, then cap each agent's total
@@ -119,9 +122,25 @@ pub fn clear_single_market(
         };
 
         let volume = demand.min(supply);
-        if volume > max_volume {
+        if volume > max_volume + 1e-12 {
             max_volume = volume;
             clearing_price = Some(price);
+        } else if max_volume > 1e-12 && (volume - max_volume).abs() <= 1e-12 {
+            let current = clearing_price.unwrap_or(price);
+            let picked = match bias {
+                PriceBias::FavorSellers => current.max(price),
+                PriceBias::FavorBuyers => current.min(price),
+                // In ties, pick the candidate closest to the midpoint of the
+                // feasible price grid to avoid systematic drift to one edge.
+                PriceBias::Neutral => {
+                    if (price - tie_midpoint).abs() < (current - tie_midpoint).abs() {
+                        price
+                    } else {
+                        current
+                    }
+                }
+            };
+            clearing_price = Some(picked);
         }
     }
 

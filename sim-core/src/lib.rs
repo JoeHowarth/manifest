@@ -86,7 +86,9 @@ pub mod world;
 // Re-export commonly used types at the crate root
 
 // Accounting
-pub use accounting::{TickStockFlow, WorldFlowSnapshot, capture_world_flow_snapshot, decompose_tick_flow};
+pub use accounting::{
+    TickStockFlow, WorldFlowSnapshot, capture_world_flow_snapshot, decompose_tick_flow,
+};
 
 // Core types
 pub use types::{

@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use sim_core::{
-    AnchoredGoodConfig, ExternalMarketConfig, GoodId, GoodProfile, MerchantAgent, MerchantId,
-    Need, NeedContribution, Pop, PopId, Price, SettlementFriction, SettlementId, UtilityCurve,
+    AnchoredGoodConfig, ExternalMarketConfig, GoodId, GoodProfile, MerchantAgent, MerchantId, Need,
+    NeedContribution, Pop, PopId, Price, SettlementFriction, SettlementId, UtilityCurve,
     run_settlement_tick,
 };
 
@@ -127,7 +127,7 @@ fn run_trial(seed: u64) -> TrialMetrics {
         .stockpile_at(settlement)
         .add(GRAIN, rng.random_range(180.0..260.0));
 
-    let mut merchants = vec![merchant];
+    let mut merchants = [merchant];
     let mut price_history = Vec::with_capacity(TICKS);
     let mut trade_value_history = Vec::with_capacity(TICKS);
 
@@ -197,8 +197,12 @@ fn compute_snapshot() -> ConvergenceBaselineSnapshot {
 
     let avg_final_price = mean(&trials.iter().map(|t| t.final_price).collect::<Vec<_>>());
     let avg_tail_price_std = mean(&trials.iter().map(|t| t.tail_price_std).collect::<Vec<_>>());
-    let avg_tail_trade_value =
-        mean(&trials.iter().map(|t| t.tail_trade_value_mean).collect::<Vec<_>>());
+    let avg_tail_trade_value = mean(
+        &trials
+            .iter()
+            .map(|t| t.tail_trade_value_mean)
+            .collect::<Vec<_>>(),
+    );
 
     ConvergenceBaselineSnapshot {
         ticks: TICKS,

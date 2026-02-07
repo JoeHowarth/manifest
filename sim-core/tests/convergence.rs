@@ -864,7 +864,7 @@ fn slope_per_tick(values: &[f64]) -> f64 {
     }
 }
 
-fn trailing<'a, T>(values: &'a [T], n: usize) -> &'a [T] {
+fn trailing<T>(values: &[T], n: usize) -> &[T] {
     if values.len() <= n {
         values
     } else {
@@ -872,6 +872,7 @@ fn trailing<'a, T>(values: &'a [T], n: usize) -> &'a [T] {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn evaluate_convergence(
     prices: &[f64],
     pops: &[usize],
@@ -1044,6 +1045,7 @@ fn run_multi_pop_trial(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_multi_pop_trial_with_controls(
     num_pops: usize,
     num_facilities: usize,

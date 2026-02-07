@@ -322,8 +322,17 @@ mod tests {
             &desired_ema,
         );
         let consumed = result.actual.get(&GRAIN).copied().unwrap_or(0.0);
-        assert!(consumed >= 0.99, "should still consume at least subsistence floor");
-        assert!(consumed <= cap + 1e-6, "actual consumption must respect cap");
-        assert!(consumed < stocks[&GRAIN], "should preserve stock buffer near target");
+        assert!(
+            consumed >= 0.99,
+            "should still consume at least subsistence floor"
+        );
+        assert!(
+            consumed <= cap + 1e-6,
+            "actual consumption must respect cap"
+        );
+        assert!(
+            consumed < stocks[&GRAIN],
+            "should preserve stock buffer near target"
+        );
     }
 }
