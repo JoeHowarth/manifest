@@ -32,7 +32,11 @@ pub const EXTERNAL_EMA_DEPTH_HALF_SATURATION: f64 = 20.0;
 pub fn qty_norm(norm_p: f64, norm_c: f64) -> f64 {
     let shortfall = (1.0 - norm_c).max(0.0);
     let price_factor = 1.0 - norm_p;
-    (shortfall * (0.3 + 0.7 * price_factor)).clamp(0.0, 1.0)
+    // Taper purchases near target to reduce buffer-edge bouncing, while
+    // increasing urgency when deeply below target.
+    let tapered_shortfall = shortfall.powf(1.2);
+    let urgency_boost = 1.0 + 0.8 * shortfall;
+    (tapered_shortfall * urgency_boost * (0.3 + 0.7 * price_factor)).clamp(0.0, 1.0)
 }
 
 /// Quantity supplied as fraction of desired_ema.
@@ -615,4 +619,39 @@ pub fn run_market_tick(
         None,
         None,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::qty_norm;
+
+    fn legacy_qty_norm(norm_p: f64, norm_c: f64) -> f64 {
+        let shortfall = (1.0 - norm_c).max(0.0);
+        let price_factor = 1.0 - norm_p;
+        (shortfall * (0.3 + 0.7 * price_factor)).clamp(0.0, 1.0)
+    }
+
+    #[test]
+    fn qty_norm_tapers_near_target() {
+        let norm_p = 0.9;
+        let near_target = 0.95;
+        let new_qty = qty_norm(norm_p, near_target);
+        let old_qty = legacy_qty_norm(norm_p, near_target);
+        assert!(
+            new_qty < old_qty,
+            "new curve should buy less near target: new={new_qty:.6}, old={old_qty:.6}"
+        );
+    }
+
+    #[test]
+    fn qty_norm_increases_urgency_when_far_below_target() {
+        let norm_p = 0.9;
+        let far_below = 0.1;
+        let new_qty = qty_norm(norm_p, far_below);
+        let old_qty = legacy_qty_norm(norm_p, far_below);
+        assert!(
+            new_qty > old_qty,
+            "new curve should buy more when far below target: new={new_qty:.6}, old={old_qty:.6}"
+        );
+    }
 }
