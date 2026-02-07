@@ -99,6 +99,8 @@ impl World {
         // === 1. PRODUCTION PHASE ===
         self.run_production_phase(recipes);
 
+        let external_market = self.external_market.clone();
+
         // Process each settlement
         let settlement_ids: Vec<SettlementId> = self.settlements.keys().copied().collect();
 
@@ -151,6 +153,8 @@ impl World {
                 good_profiles,
                 needs,
                 &mut settlement_prices,
+                external_market.as_ref(),
+                Some(&mut self.outside_flow_totals),
             );
 
             // Put pops and merchants back

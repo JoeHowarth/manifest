@@ -2,6 +2,9 @@ use std::collections::HashMap;
 
 use crate::agents::{MerchantAgent, Pop};
 use crate::consumption;
+use crate::external::{
+    ExternalMarketConfig, OutsideAgentRole, OutsideFlowTotals, generate_outside_market_orders,
+};
 use crate::market::{self, Order, Side};
 use crate::needs::Need;
 use crate::types::{AgentId, GoodId, GoodProfile, Price, SettlementId};
@@ -156,6 +159,8 @@ pub fn run_settlement_tick(
     good_profiles: &[GoodProfile],
     needs: &HashMap<String, Need>,
     price_ema: &mut HashMap<GoodId, Price>,
+    external_market: Option<&ExternalMarketConfig>,
+    outside_flow_totals: Option<&mut OutsideFlowTotals>,
 ) -> market::MultiMarketResult {
     // 0. Production
 
@@ -266,20 +271,52 @@ pub fn run_settlement_tick(
         all_orders.extend(orders);
     }
 
+    // Inject outside market ladders (if enabled for this settlement)
+    let outside_market = generate_outside_market_orders(settlement, pops.len(), external_market);
+    for mut order in outside_market.orders {
+        order.id = next_order_id;
+        next_order_id += 1;
+
+        #[cfg(feature = "instrument")]
+        {
+            let side_str = match order.side {
+                market::Side::Buy => "buy",
+                market::Side::Sell => "sell",
+            };
+            tracing::info!(
+                target: "order",
+                tick = tick,
+                settlement_id = settlement.0,
+                order_id = order.id,
+                agent_id = order.agent_id,
+                agent_type = "outside",
+                good_id = order.good,
+                side = side_str,
+                quantity = order.quantity,
+                limit_price = order.limit_price,
+            );
+        }
+
+        all_orders.push(order);
+    }
+
     // 3. GATHER BUDGETS
     // Pops spend up to income_ema per tick (but not more than they have)
     // Extra coins accumulate as savings
-    let budgets: HashMap<AgentId, f64> = pops
+    let mut budgets: HashMap<AgentId, f64> = pops
         .iter()
         .map(|p| (p.id.0, p.income_ema.min(p.currency)))
         .chain(merchants.iter().map(|m| (m.id.0, m.currency)))
         .collect();
+    for (agent, budget) in outside_market.budgets {
+        budgets.insert(agent, budget);
+    }
 
     // 4. GATHER SELLER INVENTORIES
     // Sellers can only sell what they actually have in stock.
     // Include both pops and merchants so per-agent sell ladders cannot overfill.
     let good_ids: Vec<_> = good_profiles.iter().map(|p| p.good).collect();
-    let seller_inventories: HashMap<AgentId, HashMap<GoodId, f64>> = pops
+    let mut seller_inventories: HashMap<AgentId, HashMap<GoodId, f64>> = pops
         .iter()
         .map(|p| {
             let inv: HashMap<GoodId, f64> = good_ids
@@ -299,6 +336,12 @@ pub fn run_settlement_tick(
             (m.id.0, inv)
         }))
         .collect();
+    for (agent, inv) in outside_market.inventories {
+        let entry = seller_inventories.entry(agent).or_default();
+        for (good, qty) in inv {
+            *entry.entry(good).or_insert(0.0) += qty;
+        }
+    }
 
     // 5. MARKET CLEARING
     let result = market::clear_multi_market(
@@ -311,7 +354,45 @@ pub fn run_settlement_tick(
     );
 
     // 5. APPLY FILLS
+    let mut outside_flow_totals = outside_flow_totals;
     for fill in &result.fills {
+        if let Some(role) = outside_market.roles.get(&fill.agent_id).copied() {
+            let value = fill.quantity * fill.price;
+            match role {
+                OutsideAgentRole::ImportSeller => {
+                    if let Some(totals) = outside_flow_totals.as_deref_mut() {
+                        totals.record_import(settlement, fill.good, fill.quantity, value);
+                    }
+                    #[cfg(feature = "instrument")]
+                    tracing::info!(
+                        target: "external_flow",
+                        tick = tick,
+                        settlement_id = settlement.0,
+                        flow = "import",
+                        good_id = fill.good,
+                        quantity = fill.quantity,
+                        value = value,
+                    );
+                }
+                OutsideAgentRole::ExportBuyer => {
+                    if let Some(totals) = outside_flow_totals.as_deref_mut() {
+                        totals.record_export(settlement, fill.good, fill.quantity, value);
+                    }
+                    #[cfg(feature = "instrument")]
+                    tracing::info!(
+                        target: "external_flow",
+                        tick = tick,
+                        settlement_id = settlement.0,
+                        flow = "export",
+                        good_id = fill.good,
+                        quantity = fill.quantity,
+                        value = value,
+                    );
+                }
+            }
+            continue;
+        }
+
         let is_pop = if let Some(pop) = pops.iter_mut().find(|p| p.id.0 == fill.agent_id) {
             market::apply_fill(pop, fill);
             true
@@ -380,5 +461,7 @@ pub fn run_market_tick(
         good_profiles,
         needs,
         price_ema,
+        None,
+        None,
     )
 }

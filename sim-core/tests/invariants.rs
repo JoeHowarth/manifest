@@ -93,6 +93,8 @@ fn invariant_pop_cannot_sell_more_than_inventory() {
         &good_profiles,
         &needs,
         &mut price_ema,
+        None,
+        None,
     );
 
     let remaining = seller.stocks.get(&GRAIN).copied().unwrap_or(0.0);

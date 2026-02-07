@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
+use crate::market::{Order, Side};
 use crate::types::{GoodId, Price, Quantity, SettlementId};
+
+pub const OUTSIDE_BASE_AGENT_ID: u32 = u32::MAX;
 
 /// Config for an anchored good in the outside market.
 #[derive(Debug, Clone)]
@@ -89,4 +92,104 @@ impl OutsideFlowTotals {
         *self.exports_qty.entry((settlement, good)).or_insert(0.0) += qty;
         *self.exports_value.entry((settlement, good)).or_insert(0.0) += value;
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutsideAgentRole {
+    ImportSeller,
+    ExportBuyer,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct OutsideMarketOrders {
+    pub orders: Vec<Order>,
+    pub budgets: HashMap<u32, f64>,
+    pub inventories: HashMap<u32, HashMap<GoodId, f64>>,
+    pub roles: HashMap<u32, OutsideAgentRole>,
+}
+
+fn import_agent_id(good: GoodId) -> u32 {
+    let offset = good.saturating_mul(2).saturating_add(1);
+    OUTSIDE_BASE_AGENT_ID.saturating_sub(offset)
+}
+
+fn export_agent_id(good: GoodId) -> u32 {
+    let offset = good.saturating_mul(2).saturating_add(2);
+    OUTSIDE_BASE_AGENT_ID.saturating_sub(offset)
+}
+
+/// Build outside import/export ladders for enabled settlement+goods.
+pub fn generate_outside_market_orders(
+    settlement: SettlementId,
+    pop_count: usize,
+    config: Option<&ExternalMarketConfig>,
+) -> OutsideMarketOrders {
+    let Some(config) = config else {
+        return OutsideMarketOrders::default();
+    };
+
+    let friction = config.friction_for(settlement);
+    if !friction.enabled {
+        return OutsideMarketOrders::default();
+    }
+
+    let mut out = OutsideMarketOrders::default();
+
+    for (&good, anchor) in &config.anchors {
+        let tiers = anchor.tiers.max(1);
+        let max_depth = anchor.base_depth + anchor.depth_per_pop * pop_count as f64;
+        if max_depth <= 0.0 || anchor.world_price <= 0.0 {
+            continue;
+        }
+
+        let band = (anchor.spread_bps + friction.transport_bps + friction.tariff_bps + friction.risk_bps)
+            / 10_000.0;
+        let tier_step = anchor.tier_step_bps / 10_000.0;
+        let import_agent = import_agent_id(good);
+        let export_agent = export_agent_id(good);
+
+        out.roles.insert(import_agent, OutsideAgentRole::ImportSeller);
+        out.roles.insert(export_agent, OutsideAgentRole::ExportBuyer);
+
+        let total_weight = (tiers as f64) * (tiers as f64 + 1.0) * 0.5;
+        let mut export_budget = 0.0;
+
+        for tier in 0..tiers {
+            let tier_weight = (tier + 1) as f64 / total_weight;
+            let qty = max_depth * tier_weight;
+            if qty <= 0.0 {
+                continue;
+            }
+
+            let tier_mul = 1.0 + tier_step * tier as f64;
+            let import_price = anchor.world_price * (1.0 + band) * tier_mul;
+            let export_price = (anchor.world_price * (1.0 - band) / tier_mul).max(0.0001);
+
+            out.orders.push(Order {
+                id: 0,
+                agent_id: import_agent,
+                good,
+                side: Side::Sell,
+                quantity: qty,
+                limit_price: import_price,
+            });
+            out.orders.push(Order {
+                id: 0,
+                agent_id: export_agent,
+                good,
+                side: Side::Buy,
+                quantity: qty,
+                limit_price: export_price,
+            });
+            export_budget += qty * export_price;
+        }
+
+        out.inventories
+            .entry(import_agent)
+            .or_default()
+            .insert(good, max_depth);
+        out.budgets.insert(export_agent, export_budget);
+    }
+
+    out
 }
