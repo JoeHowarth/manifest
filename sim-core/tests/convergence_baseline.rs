@@ -3,8 +3,9 @@ use std::collections::HashMap;
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use sim_core::{
-    GoodId, GoodProfile, MerchantAgent, MerchantId, Need, NeedContribution, Pop, PopId, Price,
-    SettlementId, UtilityCurve, run_settlement_tick,
+    AnchoredGoodConfig, ExternalMarketConfig, GoodId, GoodProfile, MerchantAgent, MerchantId,
+    Need, NeedContribution, Pop, PopId, Price, SettlementFriction, SettlementId, UtilityCurve,
+    run_settlement_tick,
 };
 
 const GRAIN: GoodId = 1;
@@ -89,6 +90,30 @@ fn run_trial(seed: u64) -> TrialMetrics {
     let mut price_ema: HashMap<GoodId, Price> = HashMap::new();
     price_ema.insert(GRAIN, rng.random_range(0.8..1.2));
 
+    // Add a soft grain anchor so this synthetic one-pop baseline does not
+    // deterministically decay toward near-zero nominal prices.
+    let mut external = ExternalMarketConfig::default();
+    external.anchors.insert(
+        GRAIN,
+        AnchoredGoodConfig {
+            world_price: 1.0,
+            spread_bps: 500.0,
+            base_depth: 2.0,
+            depth_per_pop: 1.0,
+            tiers: 9,
+            tier_step_bps: 300.0,
+        },
+    );
+    external.frictions.insert(
+        settlement,
+        SettlementFriction {
+            enabled: true,
+            transport_bps: 0.0,
+            tariff_bps: 0.0,
+            risk_bps: 0.0,
+        },
+    );
+
     let mut pop = Pop::new(PopId::new(1), settlement);
     pop.currency = rng.random_range(40.0..80.0);
     pop.income_ema = rng.random_range(0.9..1.2);
@@ -127,7 +152,7 @@ fn run_trial(seed: u64) -> TrialMetrics {
             &good_profiles,
             &needs,
             &mut price_ema,
-            None,
+            Some(&external),
             None,
             None,
         );
