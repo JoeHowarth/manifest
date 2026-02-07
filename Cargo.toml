@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["sim-core"]
+members = ["sim-core", "instrument"]
 
 [profile.release]
 opt-level = "s"

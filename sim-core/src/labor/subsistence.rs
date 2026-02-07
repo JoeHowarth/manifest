@@ -35,6 +35,28 @@ pub fn subsistence_output_per_worker(workers: usize, q_max: f64, crowding_alpha:
     q_max / (1.0 + crowding_alpha.max(0.0) * crowd)
 }
 
+/// Compute ranked subsistence yields for a set of pops.
+///
+/// Pops are sorted by PopId ascending. Lower-ranked pops are treated as
+/// more land-efficient and receive larger in-kind subsistence output.
+pub fn ranked_subsistence_yields(
+    pop_ids: &[PopId],
+    q_max: f64,
+    crowding_alpha: f64,
+) -> Vec<(PopId, f64)> {
+    let mut ids = pop_ids.to_vec();
+    ids.sort_by_key(|id| id.0);
+
+    ids.into_iter()
+        .enumerate()
+        .map(|(idx, pop_id)| {
+            let rank = idx + 1;
+            let qty = subsistence_output_per_worker(rank, q_max, crowding_alpha);
+            (pop_id, qty)
+        })
+        .collect()
+}
+
 /// Build deterministic per-pop reservation wages from subsistence fallback.
 ///
 /// Pops are ranked by `PopId` ascending. Higher-ranked hires correspond to fewer
@@ -44,17 +66,9 @@ pub fn build_subsistence_reservation_ladder(
     grain_price_ref: Price,
     cfg: &SubsistenceReservationConfig,
 ) -> HashMap<PopId, Price> {
-    let mut ids = pop_ids.to_vec();
-    ids.sort_by_key(|id| id.0);
-
-    let total = ids.len();
-    let mut ladder = HashMap::with_capacity(total);
-
-    for (idx, pop_id) in ids.into_iter().enumerate() {
-        let hire_rank = idx + 1; // 1-indexed
-        let subsistence_workers = total.saturating_sub(hire_rank).saturating_add(1);
-        let q_sub = subsistence_output_per_worker(subsistence_workers, cfg.q_max, cfg.crowding_alpha);
-        ladder.insert(pop_id, q_sub * grain_price_ref);
+    let mut ladder = HashMap::with_capacity(pop_ids.len());
+    for (pop_id, qty) in ranked_subsistence_yields(pop_ids, cfg.q_max, cfg.crowding_alpha) {
+        ladder.insert(pop_id, qty * grain_price_ref);
     }
 
     ladder
@@ -72,7 +86,7 @@ mod tests {
     }
 
     #[test]
-    fn reservation_ladder_is_monotone_by_hire_rank() {
+    fn reservation_ladder_is_monotone_by_efficiency_rank() {
         let cfg = SubsistenceReservationConfig {
             grain_good: 1,
             q_max: 2.0,
@@ -82,8 +96,20 @@ mod tests {
         let pops = vec![PopId::new(1), PopId::new(2), PopId::new(3), PopId::new(4)];
         let ladder = build_subsistence_reservation_ladder(&pops, 10.0, &cfg);
 
-        assert!(ladder[&PopId::new(2)] >= ladder[&PopId::new(1)]);
-        assert!(ladder[&PopId::new(3)] >= ladder[&PopId::new(2)]);
-        assert!(ladder[&PopId::new(4)] >= ladder[&PopId::new(3)]);
+        assert!(ladder[&PopId::new(1)] >= ladder[&PopId::new(2)]);
+        assert!(ladder[&PopId::new(2)] >= ladder[&PopId::new(3)]);
+        assert!(ladder[&PopId::new(3)] >= ladder[&PopId::new(4)]);
+    }
+
+    #[test]
+    fn ranked_subsistence_yields_give_earlier_pops_more() {
+        let pops = vec![PopId::new(11), PopId::new(9), PopId::new(10)];
+        let yields = ranked_subsistence_yields(&pops, 1.0, 0.5);
+        assert_eq!(yields.len(), 3);
+        assert_eq!(yields[0].0, PopId::new(9));
+        assert_eq!(yields[1].0, PopId::new(10));
+        assert_eq!(yields[2].0, PopId::new(11));
+        assert!(yields[0].1 > yields[1].1);
+        assert!(yields[1].1 > yields[2].1);
     }
 }

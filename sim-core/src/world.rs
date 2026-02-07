@@ -161,6 +161,7 @@ impl World {
                 &mut settlement_prices,
                 external_market.as_ref(),
                 Some(&mut self.outside_flow_totals),
+                self.subsistence_reservation.as_ref(),
             );
 
             // Put pops and merchants back

@@ -71,6 +71,7 @@ fn price_ceiling_with_import_anchor() {
         &mut price_ema,
         Some(&config),
         Some(&mut flows),
+        None,
     );
 
     let price = result
@@ -124,6 +125,7 @@ fn price_floor_with_export_anchor() {
         &mut price_ema,
         Some(&config),
         Some(&mut flows),
+        None,
     );
 
     let price = result
@@ -178,6 +180,7 @@ fn outside_depth_is_respected() {
         &mut price_ema,
         Some(&config),
         Some(&mut flows),
+        None,
     );
 
     let imported = flows
@@ -220,6 +223,7 @@ fn no_external_flow_when_disabled() {
         &mut price_ema,
         Some(&config),
         Some(&mut flows),
+        None,
     );
 
     let imported = flows

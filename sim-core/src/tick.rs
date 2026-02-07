@@ -5,9 +5,10 @@ use crate::consumption;
 use crate::external::{
     ExternalMarketConfig, OutsideAgentRole, OutsideFlowTotals, generate_outside_market_orders,
 };
+use crate::labor::{SubsistenceReservationConfig, ranked_subsistence_yields};
 use crate::market::{self, Order, Side};
 use crate::needs::Need;
-use crate::types::{AgentId, GoodId, GoodProfile, Price, SettlementId};
+use crate::types::{AgentId, GoodId, GoodProfile, PopId, Price, SettlementId};
 
 // === CONSTANTS ===
 
@@ -161,8 +162,43 @@ pub fn run_settlement_tick(
     price_ema: &mut HashMap<GoodId, Price>,
     external_market: Option<&ExternalMarketConfig>,
     outside_flow_totals: Option<&mut OutsideFlowTotals>,
+    subsistence_config: Option<&SubsistenceReservationConfig>,
 ) -> market::MultiMarketResult {
     // 0. Production
+
+    // 0.5 SUBSISTENCE PHASE (in-kind fallback for unemployed pops)
+    if let Some(cfg) = subsistence_config {
+        let unemployed_ids: Vec<PopId> = pops
+            .iter()
+            .filter(|p| p.employed_at.is_none())
+            .map(|p| p.id)
+            .collect();
+
+        let yields = ranked_subsistence_yields(&unemployed_ids, cfg.q_max, cfg.crowding_alpha);
+        let yield_map: HashMap<PopId, f64> = yields.into_iter().collect();
+
+        for pop in pops.iter_mut() {
+            if pop.employed_at.is_some() {
+                continue;
+            }
+            let qty = yield_map.get(&pop.id).copied().unwrap_or(0.0);
+            if qty <= 0.0 {
+                continue;
+            }
+
+            *pop.stocks.entry(cfg.grain_good).or_insert(0.0) += qty;
+
+            #[cfg(feature = "instrument")]
+            tracing::info!(
+                target: "subsistence",
+                tick = tick,
+                settlement_id = settlement.0,
+                pop_id = pop.id.0,
+                good_id = cfg.grain_good,
+                quantity = qty,
+            );
+        }
+    }
 
     // 1. CONSUMPTION PHASE
     for pop in pops.iter_mut() {
@@ -469,6 +505,7 @@ pub fn run_market_tick(
         good_profiles,
         needs,
         price_ema,
+        None,
         None,
         None,
     )

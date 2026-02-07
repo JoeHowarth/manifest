@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 
 use sim_core::{
+    AnchoredGoodConfig, ExternalMarketConfig, SettlementFriction, SubsistenceReservationConfig,
     World,
     labor::SkillId,
     needs::{Need, UtilityCurve},
@@ -753,6 +754,56 @@ struct MultiPopResult {
     extinction: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct StabilizationControls {
+    enable_external_grain_anchor: bool,
+    enable_subsistence_reservation: bool,
+}
+
+fn enable_stabilizers_for_settlement(
+    world: &mut World,
+    settlement: sim_core::SettlementId,
+    controls: StabilizationControls,
+) {
+    if controls.enable_external_grain_anchor {
+        let mut external = ExternalMarketConfig::default();
+        external.anchors.insert(
+            GRAIN,
+            AnchoredGoodConfig {
+                world_price: 10.0,
+                spread_bps: 500.0,
+                base_depth: 0.0,
+                depth_per_pop: 0.1,
+                tiers: 9,
+                tier_step_bps: 300.0,
+            },
+        );
+        external.frictions.insert(
+            settlement,
+            SettlementFriction {
+                enabled: true,
+                // Keep external export parity near local scale while preserving
+                // the user-selected world anchor of 10.0.
+                transport_bps: 9000.0,
+                tariff_bps: 0.0,
+                risk_bps: 0.0,
+            },
+        );
+        world.set_external_market(external);
+    }
+
+    if controls.enable_subsistence_reservation {
+        world.set_subsistence_reservation(SubsistenceReservationConfig {
+            grain_good: GRAIN,
+            // Keep fallback below initial formal wage so all workers can be hired
+            // at startup, then let crowding dynamics shape asks over time.
+            q_max: 0.08,
+            crowding_alpha: 0.02,
+            default_grain_price: 10.0,
+        });
+    }
+}
+
 /// Run a multi-pop trial
 fn run_multi_pop_trial(
     num_pops: usize,
@@ -762,6 +813,28 @@ fn run_multi_pop_trial(
     initial_pop_stock: f64,
     initial_merchant_stock: f64,
     ticks: usize,
+) -> MultiPopResult {
+    run_multi_pop_trial_with_controls(
+        num_pops,
+        num_facilities,
+        production_rate,
+        initial_price,
+        initial_pop_stock,
+        initial_merchant_stock,
+        ticks,
+        StabilizationControls::default(),
+    )
+}
+
+fn run_multi_pop_trial_with_controls(
+    num_pops: usize,
+    num_facilities: usize,
+    production_rate: f64,
+    initial_price: f64,
+    initial_pop_stock: f64,
+    initial_merchant_stock: f64,
+    ticks: usize,
+    controls: StabilizationControls,
 ) -> MultiPopResult {
     let mut world = create_multi_pop_world(
         num_pops,
@@ -776,6 +849,7 @@ fn run_multi_pop_trial(
     let needs = make_needs(1.0); // consumption requirement = 1.0
 
     let settlement = *world.settlements.keys().next().unwrap();
+    enable_stabilizers_for_settlement(&mut world, settlement, controls);
 
     let mut price_history = Vec::new();
     let mut pop_count_history = Vec::new();
@@ -910,14 +984,18 @@ fn multi_pop_basic_convergence() {
     // With 100 workers × 1 grain = 100 production/tick
     // Merchant target buffer = 2 ticks × 100 = 200 units
     // Start merchant at target to avoid initial reluctance to sell
-    let result = run_multi_pop_trial(
-        100,   // pops
-        2,     // facilities
-        1.0,   // production per worker (1 grain each)
-        1.0,   // initial price
-        5.0,   // initial pop stock (at target)
-        200.0, // initial merchant stock (at 2-tick buffer target)
-        200,   // ticks
+    let result = run_multi_pop_trial_with_controls(
+        100,
+        2,
+        1.0,
+        1.0,
+        5.0,
+        200.0,
+        200,
+        StabilizationControls {
+            enable_external_grain_anchor: true,
+            enable_subsistence_reservation: true,
+        },
     );
 
     println!("Setup: 100 pops, 2 facilities producing 50 each");
