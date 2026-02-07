@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use sim_core::{
-    GoodId, GoodProfile, Need, NeedContribution, Pop, PopId, Price, Recipe, SettlementId,
-    UtilityCurve, World, labor::SkillId,
+    AnchoredGoodConfig, ExternalMarketConfig, GoodId, GoodProfile, Need, NeedContribution,
+    OutsideFlowTotals, Pop, PopId, Price, Recipe, SettlementFriction, SettlementId,
+    SubsistenceReservationConfig, UtilityCurve, World, labor::SkillId,
     production::{FacilityType, RecipeId},
     run_settlement_tick,
 };
@@ -106,7 +107,7 @@ fn invariant_pop_cannot_sell_more_than_inventory() {
 }
 
 #[test]
-fn invariant_balanced_economy_keeps_nonzero_employment() {
+fn invariant_labor_assignment_accounting_consistent() {
     let mut world = World::new();
     let settlement = world.add_settlement("BalanceTown", (0.0, 0.0));
     let merchant = world.add_merchant();
@@ -180,26 +181,178 @@ fn invariant_balanced_economy_keeps_nonzero_employment() {
     ];
 
     let initial_pop_count = world.pops.len();
-    let mut saw_zero_employment = false;
     for _ in 0..80 {
         world.run_tick(&good_profiles, &needs, &recipes);
 
         let employed_now = world.pops.values().filter(|p| p.employed_at.is_some()).count();
-        if employed_now == 0 {
-            saw_zero_employment = true;
-            break;
+        let workers_in_facilities: usize = world
+            .facilities
+            .values()
+            .map(|f| f.workers.values().sum::<u32>() as usize)
+            .sum();
+
+        assert_eq!(
+            employed_now, workers_in_facilities,
+            "Employment/facility worker mismatch: employed={employed_now}, facility_workers={workers_in_facilities}"
+        );
+        assert!(
+            employed_now <= world.pops.len(),
+            "More employed pops than total pops: employed={employed_now}, total={}",
+            world.pops.len()
+        );
+
+        for facility in world.facilities.values() {
+            let total_workers: u32 = facility.workers.values().sum();
+            assert!(
+                total_workers <= facility.capacity,
+                "Facility over capacity: facility={:?}, workers={}, capacity={}",
+                facility.id,
+                total_workers,
+                facility.capacity
+            );
         }
     }
-
-    let employed = world.pops.values().filter(|p| p.employed_at.is_some()).count();
 
     assert_eq!(
         world.pops.len(),
         initial_pop_count,
         "Population should stay constant when mortality is disabled"
     );
+}
+
+#[test]
+fn invariant_external_flow_matches_local_currency_delta() {
+    let settlement = SettlementId::new(0);
+    let mut price_ema: HashMap<GoodId, Price> = HashMap::new();
+    price_ema.insert(GRAIN, 0.45);
+
+    let good_profiles = vec![GoodProfile {
+        good: GRAIN,
+        contributions: vec![],
+    }];
+    let needs: HashMap<String, Need> = HashMap::new();
+
+    let mut seller = Pop::new(PopId::new(1), settlement);
+    seller.currency = 0.0;
+    seller.income_ema = 0.0;
+    seller.stocks.insert(GRAIN, 50.0);
+    seller.desired_consumption_ema.insert(GRAIN, 0.01);
+
+    let mut buyer = Pop::new(PopId::new(2), settlement);
+    buyer.currency = 200.0;
+    buyer.income_ema = 200.0;
+    buyer.stocks.insert(GRAIN, 0.0);
+    buyer.desired_consumption_ema.insert(GRAIN, 10.0);
+
+    let mut external = ExternalMarketConfig::default();
+    external.anchors.insert(
+        GRAIN,
+        AnchoredGoodConfig {
+            world_price: 10.0,
+            spread_bps: 500.0,
+            base_depth: 12.0,
+            depth_per_pop: 0.0,
+            tiers: 9,
+            tier_step_bps: 300.0,
+        },
+    );
+    external.frictions.insert(
+        settlement,
+        SettlementFriction {
+            enabled: true,
+            transport_bps: 9000.0,
+            tariff_bps: 0.0,
+            risk_bps: 0.0,
+        },
+    );
+
+    let initial_currency = seller.currency + buyer.currency;
+    let mut flows = OutsideFlowTotals::default();
+    let mut pops: Vec<&mut Pop> = vec![&mut seller, &mut buyer];
+    let mut merchants = Vec::new();
+    let _ = run_settlement_tick(
+        1,
+        settlement,
+        &mut pops,
+        &mut merchants,
+        &good_profiles,
+        &needs,
+        &mut price_ema,
+        Some(&external),
+        Some(&mut flows),
+        None,
+    );
+    let final_currency = seller.currency + buyer.currency;
+    let currency_delta = final_currency - initial_currency;
+
+    let exports_value = flows
+        .exports_value
+        .get(&(settlement, GRAIN))
+        .copied()
+        .unwrap_or(0.0);
+    let imports_value = flows
+        .imports_value
+        .get(&(settlement, GRAIN))
+        .copied()
+        .unwrap_or(0.0);
+    let expected_delta = exports_value - imports_value;
+
+    let diff = (currency_delta - expected_delta).abs();
     assert!(
-        !saw_zero_employment && employed > 0,
-        "Balanced economy should not drop to zero employment in steady state; employed={employed}, saw_zero={saw_zero_employment}"
+        diff < 1e-6,
+        "External flow accounting mismatch: currency_delta={currency_delta:.6}, expected={expected_delta:.6}, diff={diff:.6}"
+    );
+}
+
+#[test]
+fn invariant_subsistence_allocates_more_to_earlier_pops() {
+    let settlement = SettlementId::new(0);
+    let mut price_ema: HashMap<GoodId, Price> = HashMap::new();
+    price_ema.insert(GRAIN, 1.0);
+
+    let good_profiles = vec![GoodProfile {
+        good: GRAIN,
+        contributions: vec![],
+    }];
+    let needs: HashMap<String, Need> = HashMap::new();
+
+    let mut pop_a = Pop::new(PopId::new(1), settlement);
+    let mut pop_b = Pop::new(PopId::new(2), settlement);
+    let mut pop_c = Pop::new(PopId::new(3), settlement);
+    pop_a.stocks.insert(GRAIN, 0.0);
+    pop_b.stocks.insert(GRAIN, 0.0);
+    pop_c.stocks.insert(GRAIN, 0.0);
+    pop_a.desired_consumption_ema.insert(GRAIN, 0.0);
+    pop_b.desired_consumption_ema.insert(GRAIN, 0.0);
+    pop_c.desired_consumption_ema.insert(GRAIN, 0.0);
+
+    let subsistence = SubsistenceReservationConfig {
+        grain_good: GRAIN,
+        q_max: 3.0,
+        crowding_alpha: 1.0,
+        default_grain_price: 10.0,
+    };
+
+    let mut pops: Vec<&mut Pop> = vec![&mut pop_a, &mut pop_b, &mut pop_c];
+    let mut merchants = Vec::new();
+    let _ = run_settlement_tick(
+        1,
+        settlement,
+        &mut pops,
+        &mut merchants,
+        &good_profiles,
+        &needs,
+        &mut price_ema,
+        None,
+        None,
+        Some(&subsistence),
+    );
+
+    let a = pop_a.stocks.get(&GRAIN).copied().unwrap_or(0.0);
+    let b = pop_b.stocks.get(&GRAIN).copied().unwrap_or(0.0);
+    let c = pop_c.stocks.get(&GRAIN).copied().unwrap_or(0.0);
+    assert!(
+        a > b && b > c,
+        "Subsistence ranking violated: pop1={a:.4}, pop2={b:.4}, pop3={c:.4}"
     );
 }

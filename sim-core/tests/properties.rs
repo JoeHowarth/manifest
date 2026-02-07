@@ -48,14 +48,16 @@ fn create_good_profiles() -> Vec<GoodProfile> {
         GoodProfile {
             good: GRAIN,
             contributions: vec![NeedContribution {
-                need_id: "food".to_string(),
+                // Use a non-"food" need key so mortality is disabled in these
+                // accounting-focused property tests.
+                need_id: "calories".to_string(),
                 efficiency: 1.0,
             }],
         },
         GoodProfile {
             good: BREAD,
             contributions: vec![NeedContribution {
-                need_id: "food".to_string(),
+                need_id: "calories".to_string(),
                 efficiency: 2.0,
             }],
         },
@@ -66,9 +68,9 @@ fn create_good_profiles() -> Vec<GoodProfile> {
 fn create_needs() -> HashMap<String, Need> {
     let mut needs = HashMap::new();
     needs.insert(
-        "food".to_string(),
+        "calories".to_string(),
         Need {
-            id: "food".to_string(),
+            id: "calories".to_string(),
             utility_curve: UtilityCurve::Subsistence {
                 requirement: 1.0,
                 steepness: 5.0,
@@ -245,18 +247,32 @@ fn entities_persist_across_ticks() {
     let good_profiles = create_good_profiles();
     let needs = create_needs();
 
-    let initial_pop_count = world.pops.len();
     let initial_settlement_count = world.settlements.len();
 
     for tick in 0..20 {
         world.run_tick(&good_profiles, &needs, &Vec::<Recipe>::new());
 
+        // Population can change due growth/death mechanics. The true invariant is
+        // referential consistency: each settlement's pop list must map to existing pops.
+        let mut listed_pop_count = 0usize;
+        for settlement in world.settlements.values() {
+            for pop_id in &settlement.pop_ids {
+                assert!(
+                    world.pops.contains_key(pop_id),
+                    "Settlement {:?} references missing pop {:?} at tick {}",
+                    settlement.id,
+                    pop_id,
+                    tick
+                );
+                listed_pop_count += 1;
+            }
+        }
         assert_eq!(
+            listed_pop_count,
             world.pops.len(),
-            initial_pop_count,
-            "Pop count changed at tick {}: expected {}, got {}",
+            "Settlement pop lists out of sync at tick {}: listed={}, actual={}",
             tick,
-            initial_pop_count,
+            listed_pop_count,
             world.pops.len()
         );
 
