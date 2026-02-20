@@ -38,7 +38,7 @@ The key insight across all of these: none of them is a "game mechanic" in the tr
 
 ## What's built
 
-The simulation core runs in Rust, compiled to WASM. A web frontend renders the map, markets, and settlement details. The two halves communicate through state snapshots - the simulation doesn't know how it's being displayed, and the renderer doesn't know how prices are calculated.
+The simulation core is written in Rust. There's no frontend yet — the simulation is exercised and observed through its test suite and instrumentation layer.
 
 The project has an unusually strong testing and observability layer. Invariant tests verify that currency is conserved, stocks never go negative, and accounting stays consistent. Convergence tests run scenarios from various starting conditions and check that the economy stabilizes rather than exploding or collapsing. Stress scenarios push the system into uncomfortable regimes to map out where it breaks. This infrastructure matters because when you're building on emergent dynamics rather than designed outcomes, you need to know quickly when something has gone wrong - and "wrong" is often subtle, a slow drift rather than a crash.
 
