@@ -115,6 +115,7 @@ fn invariant_pop_cannot_sell_more_than_inventory() {
         None,
         None,
         &HashMap::new(),
+        None,
     );
 
     let remaining = seller.stocks.get(&GRAIN).copied().unwrap_or(0.0);
@@ -305,6 +306,7 @@ fn invariant_external_flow_matches_local_currency_delta() {
             Some(&mut flows),
             None,
             &HashMap::new(),
+            None,
         );
         let post_currency = seller.currency + buyer.currency;
         let currency_delta = post_currency - pre_currency;
@@ -351,7 +353,12 @@ fn invariant_subsistence_allocates_more_to_earlier_pops() {
     pop_b.desired_consumption_ema.insert(GRAIN, 0.0);
     pop_c.desired_consumption_ema.insert(GRAIN, 0.0);
 
-    let subsistence = SubsistenceReservationConfig::new(GRAIN, 1.5, 3, 10.0);
+    // k=2: ranks 1-2 get q_max, rank 3 gets less (crowding dropoff)
+    let subsistence = SubsistenceReservationConfig::new(GRAIN, 1.5, 2, 10.0, 0.10);
+
+    // Queue orders pops as [3, 1, 2] — pop3 rank 1, pop1 rank 2, pop2 rank 3.
+    // With k=2: pop3 and pop1 get q_max (1.5), pop2 gets 0.75 (crowding).
+    let queue = vec![PopId::new(3), PopId::new(1), PopId::new(2)];
 
     let mut pops: Vec<&mut Pop> = vec![&mut pop_a, &mut pop_b, &mut pop_c];
     let mut merchants = Vec::new();
@@ -367,14 +374,17 @@ fn invariant_subsistence_allocates_more_to_earlier_pops() {
         None,
         Some(&subsistence),
         &HashMap::new(),
+        Some(&queue),
     );
 
     let a = pop_a.stocks.get(&GRAIN).copied().unwrap_or(0.0);
     let b = pop_b.stocks.get(&GRAIN).copied().unwrap_or(0.0);
     let c = pop_c.stocks.get(&GRAIN).copied().unwrap_or(0.0);
+    // Queue [3,1,2] with k=2: pop3=1.5 (rank1), pop1=1.5 (rank2), pop2=0.75 (rank3)
+    // Front of queue gets at least as much as middle, middle strictly more than back.
     assert!(
-        a > b && b > c,
-        "Subsistence ranking violated: pop1={a:.4}, pop2={b:.4}, pop3={c:.4}"
+        c >= a && a > b,
+        "Queue-ordered subsistence ranking violated: pop3={c:.4}, pop1={a:.4}, pop2={b:.4}"
     );
 }
 

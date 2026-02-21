@@ -63,6 +63,7 @@ fn run_subsistence_only_trial(initial_pop: usize, ticks: usize) -> Vec<f64> {
         SUBSISTENCE_Q_MAX,
         SUBSISTENCE_CARRYING_CAPACITY,
         10.0,
+        0.10,
     ));
 
     for _ in 0..initial_pop {

@@ -97,29 +97,6 @@ fn configure_anchor(
     world.set_external_market(external);
 }
 
-
-fn col_f64(df: &DataFrame, name: &str) -> Vec<f64> {
-    let series = df.column(name).unwrap();
-    match series.dtype() {
-        polars::datatypes::DataType::Float64 => {
-            series.f64().unwrap().into_no_null_iter().collect()
-        }
-        polars::datatypes::DataType::UInt64 => {
-            series.u64().unwrap().into_no_null_iter().map(|v| v as f64).collect()
-        }
-        polars::datatypes::DataType::UInt32 => {
-            series.u32().unwrap().into_no_null_iter().map(|v| v as f64).collect()
-        }
-        polars::datatypes::DataType::Int32 => {
-            series.i32().unwrap().into_no_null_iter().map(|v| v as f64).collect()
-        }
-        polars::datatypes::DataType::Int64 => {
-            series.i64().unwrap().into_no_null_iter().map(|v| v as f64).collect()
-        }
-        dt => panic!("col_f64: unsupported dtype {dt:?} for column {name}"),
-    }
-}
-
 #[test]
 #[ignore = "investigation workflow; run manually"]
 fn investigate_anchor_regimes_with_dataframes() {
@@ -612,7 +589,7 @@ fn investigate_population_trap() {
         },
     );
     world.set_external_market(external);
-    world.set_subsistence_reservation(SubsistenceReservationConfig::new(GRAIN, 1.5, 10, 10.0));
+    world.set_subsistence_reservation(SubsistenceReservationConfig::new(GRAIN, 1.5, 10, 10.0, 0.10));
 
     let recipes = vec![make_grain_recipe(production_rate)];
     let good_profiles = make_grain_profile();
@@ -1198,7 +1175,7 @@ fn investigate_feedback_loops() {
         },
     );
     world.set_external_market(external);
-    world.set_subsistence_reservation(SubsistenceReservationConfig::new(GRAIN, 1.5, 10, 10.0));
+    world.set_subsistence_reservation(SubsistenceReservationConfig::new(GRAIN, 1.5, 10, 10.0, 0.10));
 
     let recipes = vec![make_grain_recipe(production_rate)];
     let good_profiles = make_grain_profile();
@@ -1858,7 +1835,7 @@ fn investigate_monopsony_vs_competition() {
         world.price_ema.insert((settlement, GRAIN), initial_price);
 
         // Enable subsistence reservation (low reservation wages)
-        world.subsistence_reservation = Some(SubsistenceReservationConfig::new(GRAIN, 1.5, 10, 10.0));
+        world.subsistence_reservation = Some(SubsistenceReservationConfig::new(GRAIN, 1.5, 10, 10.0, 0.10));
 
         // Light external anchor — don't drain everything
         let mut external = ExternalMarketConfig::default();
@@ -2063,7 +2040,7 @@ fn run_convergence_investigation(production_rate: f64) {
         },
     );
     world.set_external_market(external);
-    world.set_subsistence_reservation(SubsistenceReservationConfig::new(GRAIN, 1.5, num_pops / 2, 10.0));
+    world.set_subsistence_reservation(SubsistenceReservationConfig::new(GRAIN, 1.5, num_pops / 2, 10.0, 0.10));
 
     let recipes = vec![make_grain_recipe(production_rate)];
     let good_profiles = make_grain_profile();
@@ -2594,7 +2571,7 @@ fn investigate_longrun_equilibrium() {
         risk_bps: 0.0,
     });
     world.set_external_market(external);
-    world.set_subsistence_reservation(SubsistenceReservationConfig::new(GRAIN, 1.5, num_pops / 2, 10.0));
+    world.set_subsistence_reservation(SubsistenceReservationConfig::new(GRAIN, 1.5, num_pops / 2, 10.0, 0.10));
 
     let recipes = vec![make_grain_recipe(production_rate)];
     let good_profiles = make_grain_profile();
@@ -2836,7 +2813,7 @@ fn investigate_backstop_subsistence_labor() {
 
     // Configure anchor + subsistence
     configure_anchor(&mut world, settlement, 0.10, 9000.0);
-    world.set_subsistence_reservation(SubsistenceReservationConfig::new(GRAIN, 1.0, 50, 10.0));
+    world.set_subsistence_reservation(SubsistenceReservationConfig::new(GRAIN, 1.0, 50, 10.0, 0.10));
 
     let recipes = vec![common::make_grain_recipe(production_rate)];
     let good_profiles = common::make_grain_profile();
@@ -3030,5 +3007,353 @@ fn investigate_backstop_subsistence_labor() {
                     t, totals[i], deaths[i], births[i], avg_sats[i], min_sats[i]);
             }
         }
+    }
+}
+
+/// Investigation test: gather empirical metrics for all convergence scenarios
+/// to calibrate DataFrame-based assertion bounds.
+///
+/// Uses the SAME world setup as convergence.rs (pops start unemployed, min_wage=0)
+/// to get representative data for bound calibration.
+#[test]
+#[ignore = "investigation workflow; run manually to calibrate convergence bounds"]
+fn investigate_convergence_scenarios() {
+    use sim_core::instrument;
+    use sim_core::SubsistenceReservationConfig;
+    use sim_core::{AnchoredGoodConfig, SettlementFriction};
+
+    struct ConvergenceScenario {
+        name: &'static str,
+        num_pops: usize,
+        num_facilities: usize,
+        production_rate: f64,
+        initial_price: f64,
+        initial_pop_stock: f64,
+        initial_merchant_stock: f64,
+        ticks: usize,
+        tail_window: usize,
+        q_max: f64,
+    }
+
+    /// Create world matching convergence.rs create_multi_pop_world (pops start unemployed, min_wage=0)
+    fn create_convergence_world(
+        num_pops: usize,
+        num_facilities: usize,
+        initial_price: f64,
+        initial_pop_stock: f64,
+        initial_merchant_stock: f64,
+    ) -> (World, sim_core::SettlementId) {
+        let mut world = World::new();
+        let settlement = world.add_settlement("TestTown", (0.0, 0.0));
+
+        let merchant = world.add_merchant();
+        {
+            let m = world.get_merchant_mut(merchant).unwrap();
+            m.currency = 10000.0;
+            if initial_merchant_stock > 0.0 {
+                m.stockpile_at(settlement).add(GRAIN, initial_merchant_stock);
+            }
+        }
+
+        let workers_per_facility = num_pops.div_ceil(num_facilities);
+        let mut facility_ids = Vec::new();
+        for _ in 0..num_facilities {
+            let farm = world
+                .add_facility(sim_core::production::FacilityType::Farm, settlement, merchant)
+                .unwrap();
+            let f = world.get_facility_mut(farm).unwrap();
+            f.capacity = workers_per_facility as u32;
+            f.recipe_priorities = vec![sim_core::production::RecipeId::new(1)];
+            facility_ids.push(farm);
+        }
+
+        // Start unemployed, min_wage=0 — same as convergence.rs
+        for _ in 0..num_pops {
+            let pop = world.add_pop(settlement).unwrap();
+            let p = world.get_pop_mut(pop).unwrap();
+            p.currency = 100.0;
+            p.skills.insert(LABORER);
+            p.min_wage = 0.0;
+            p.income_ema = 1.0;
+            p.stocks.insert(GRAIN, initial_pop_stock);
+            p.desired_consumption_ema.insert(GRAIN, 1.0);
+        }
+
+        world.wage_ema.insert(LABORER, 1.0);
+        world.price_ema.insert((settlement, GRAIN), initial_price);
+
+        (world, settlement)
+    }
+
+    fn enable_convergence_stabilizers(
+        world: &mut World,
+        settlement: sim_core::SettlementId,
+        q_max: f64,
+    ) {
+        let mut external = ExternalMarketConfig::default();
+        external.anchors.insert(
+            GRAIN,
+            AnchoredGoodConfig {
+                world_price: 10.0,
+                spread_bps: 500.0,
+                base_depth: 0.0,
+                depth_per_pop: 0.1,
+                tiers: 9,
+                tier_step_bps: 300.0,
+            },
+        );
+        external.frictions.insert(
+            settlement,
+            SettlementFriction {
+                enabled: true,
+                transport_bps: 9000.0,
+                tariff_bps: 0.0,
+                risk_bps: 0.0,
+            },
+        );
+        world.set_external_market(external);
+        world.set_subsistence_reservation(SubsistenceReservationConfig::new(
+            GRAIN, q_max, 50, 10.0, 0.10,
+        ));
+    }
+
+    let scenarios = [
+        ConvergenceScenario {
+            name: "basic",
+            num_pops: 100, num_facilities: 2,
+            production_rate: 1.05, initial_price: 1.0,
+            initial_pop_stock: 5.0, initial_merchant_stock: 210.0,
+            ticks: 600, tail_window: 200, q_max: 1.0,
+        },
+        ConvergenceScenario {
+            name: "sweep_balanced",
+            num_pops: 100, num_facilities: 2,
+            production_rate: 1.05, initial_price: 1.0,
+            initial_pop_stock: 5.0, initial_merchant_stock: 200.0,
+            ticks: 600, tail_window: 200, q_max: 1.0,
+        },
+        ConvergenceScenario {
+            name: "sweep_empty_merchant",
+            num_pops: 100, num_facilities: 2,
+            production_rate: 1.05, initial_price: 0.6,
+            initial_pop_stock: 5.0, initial_merchant_stock: 0.0,
+            ticks: 600, tail_window: 200, q_max: 1.0,
+        },
+        ConvergenceScenario {
+            name: "sweep_high_price",
+            num_pops: 100, num_facilities: 2,
+            production_rate: 1.05, initial_price: 1.4,
+            initial_pop_stock: 4.0, initial_merchant_stock: 120.0,
+            ticks: 600, tail_window: 200, q_max: 1.0,
+        },
+        ConvergenceScenario {
+            name: "pop_sensitivity_50",
+            num_pops: 50, num_facilities: 1,
+            production_rate: 1.05, initial_price: 1.0,
+            initial_pop_stock: 5.0, initial_merchant_stock: 105.0,
+            ticks: 600, tail_window: 200, q_max: 1.0,
+        },
+        ConvergenceScenario {
+            name: "pop_sensitivity_200",
+            num_pops: 200, num_facilities: 4,
+            production_rate: 1.05, initial_price: 1.0,
+            initial_pop_stock: 5.0, initial_merchant_stock: 420.0,
+            ticks: 600, tail_window: 200, q_max: 1.0,
+        },
+        ConvergenceScenario {
+            name: "mortality_feedback",
+            num_pops: 100, num_facilities: 2,
+            production_rate: 1.05, initial_price: 3.0,
+            initial_pop_stock: 1.0, initial_merchant_stock: 10.0,
+            ticks: 600, tail_window: 200, q_max: 1.0,
+        },
+        ConvergenceScenario {
+            name: "calibration_chosen",
+            num_pops: 100, num_facilities: 2,
+            production_rate: 1.0, initial_price: 1.0,
+            initial_pop_stock: 5.0, initial_merchant_stock: 210.0,
+            ticks: 220, tail_window: 40, q_max: 1.0,
+        },
+    ];
+
+    instrument::install_subscriber();
+
+    println!("\n{}", "=".repeat(120));
+    println!("=== CONVERGENCE SCENARIO INVESTIGATION ===");
+    println!("{}\n", "=".repeat(120));
+
+    for scenario in &scenarios {
+        instrument::clear();
+
+        let (mut world, settlement) = create_convergence_world(
+            scenario.num_pops,
+            scenario.num_facilities,
+            scenario.initial_price,
+            scenario.initial_pop_stock,
+            scenario.initial_merchant_stock,
+        );
+        enable_convergence_stabilizers(&mut world, settlement, scenario.q_max);
+
+        let recipes = vec![make_grain_recipe(scenario.production_rate)];
+        let good_profiles = make_grain_profile();
+        let needs = make_food_need(1.0);
+
+        for _ in 0..scenario.ticks {
+            world.run_tick(&good_profiles, &needs, &recipes);
+            if world.pops.is_empty() {
+                break;
+            }
+        }
+
+        let dfs = instrument::drain_to_dataframes();
+
+        println!("--- {} ---", scenario.name);
+        println!("  Setup: {} pops, {} fac, prod={}, price0={}, pop_stk={}, merc_stk={}, ticks={}, q_max={}",
+            scenario.num_pops, scenario.num_facilities, scenario.production_rate,
+            scenario.initial_price, scenario.initial_pop_stock, scenario.initial_merchant_stock,
+            scenario.ticks, scenario.q_max);
+
+        // -- Price per tick --
+        let price_stats = if let Some(fill) = dfs.get("fill") {
+            let prices_by_tick = fill
+                .clone()
+                .lazy()
+                .group_by([col("tick")])
+                .agg([col("price").mean().alias("price")])
+                .sort(["tick"], Default::default())
+                .collect()
+                .unwrap();
+            let price_series = col_f64(&prices_by_tick, "price");
+            Some(compute_tail_stats(&price_series, scenario.tail_window))
+        } else {
+            println!("  WARNING: no fill dataframe");
+            None
+        };
+
+        // -- Employment per tick --
+        let emp_stats = if let Some(assignment) = dfs.get("assignment") {
+            let emp_by_tick = assignment
+                .clone()
+                .lazy()
+                .group_by([col("tick")])
+                .agg([col("pop_id").n_unique().alias("employed")])
+                .sort(["tick"], Default::default())
+                .collect()
+                .unwrap();
+            let emp_series = col_f64(&emp_by_tick, "employed");
+            Some(compute_tail_stats(&emp_series, scenario.tail_window))
+        } else {
+            None
+        };
+
+        // -- Population per tick (from mortality df) --
+        let (pop_stats, total_deaths, total_grows, early_deaths) = if let Some(mortality) = dfs.get("mortality") {
+            let pop_by_tick = mortality
+                .clone()
+                .lazy()
+                .group_by([col("tick")])
+                .agg([col("pop_id").n_unique().alias("pop_count")])
+                .sort(["tick"], Default::default())
+                .collect()
+                .unwrap();
+            let pop_series = col_f64(&pop_by_tick, "pop_count");
+            let ps = compute_tail_stats(&pop_series, scenario.tail_window);
+
+            let totals = mortality
+                .clone()
+                .lazy()
+                .select([
+                    col("outcome").eq(lit("dies")).cast(DataType::Int32).sum().alias("deaths"),
+                    col("outcome").eq(lit("grows")).cast(DataType::Int32).sum().alias("grows"),
+                ])
+                .collect()
+                .unwrap();
+            let deaths = totals.column("deaths").unwrap().i32().unwrap().get(0).unwrap_or(0) as usize;
+            let grows = totals.column("grows").unwrap().i32().unwrap().get(0).unwrap_or(0) as usize;
+
+            let early = mortality
+                .clone()
+                .lazy()
+                .filter(col("tick").lt(lit(50u64)).and(col("outcome").eq(lit("dies"))))
+                .select([col("pop_id").count().alias("n")])
+                .collect()
+                .unwrap();
+            let early_d = early.column("n").unwrap().u32().unwrap().get(0).unwrap_or(0) as usize;
+
+            (Some(ps), deaths, grows, early_d)
+        } else {
+            (None, 0, 0, 0)
+        };
+
+        // -- Food satisfaction per tick --
+        let food_sat_stats = if let Some(mortality) = dfs.get("mortality") {
+            let sat_by_tick = mortality
+                .clone()
+                .lazy()
+                .group_by([col("tick")])
+                .agg([col("food_satisfaction").mean().alias("food_sat")])
+                .sort(["tick"], Default::default())
+                .collect()
+                .unwrap();
+            let sat_series = col_f64(&sat_by_tick, "food_sat");
+            Some(compute_tail_stats(&sat_series, scenario.tail_window))
+        } else {
+            None
+        };
+
+        // -- Employment rate --
+        let emp_rate_stats = if let (Some(_), Some(_)) = (&pop_stats, &emp_stats) {
+            if let (Some(mortality), Some(assignment)) = (dfs.get("mortality"), dfs.get("assignment")) {
+                let pop_by_tick = mortality
+                    .clone()
+                    .lazy()
+                    .group_by([col("tick")])
+                    .agg([col("pop_id").n_unique().alias("pop_count")])
+                    .sort(["tick"], Default::default())
+                    .collect()
+                    .unwrap();
+                let emp_by_tick = assignment
+                    .clone()
+                    .lazy()
+                    .group_by([col("tick")])
+                    .agg([col("pop_id").n_unique().alias("employed")])
+                    .sort(["tick"], Default::default())
+                    .collect()
+                    .unwrap();
+                let merged = pop_by_tick
+                    .lazy()
+                    .join(emp_by_tick.lazy(), [col("tick")], [col("tick")], JoinArgs::new(JoinType::Left))
+                    .with_column(col("employed").fill_null(lit(0u32)))
+                    .with_column(
+                        (col("employed").cast(DataType::Float64) / col("pop_count").cast(DataType::Float64))
+                            .alias("emp_rate"),
+                    )
+                    .sort(["tick"], Default::default())
+                    .collect()
+                    .unwrap();
+                let emp_rate_series = col_f64(&merged, "emp_rate");
+                Some(compute_tail_stats(&emp_rate_series, scenario.tail_window))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // -- Print results --
+        if let Some(ps) = &price_stats {
+            println!("  Price:    {}", ps);
+        }
+        if let Some(es) = &emp_rate_stats {
+            println!("  EmpRate:  {}", es);
+        }
+        if let Some(ps) = &pop_stats {
+            println!("  Pop:      {}", ps);
+        }
+        if let Some(fs) = &food_sat_stats {
+            println!("  FoodSat:  {}", fs);
+        }
+        println!("  Deaths: total={}, early(<50)={}, Grows: total={}", total_deaths, early_deaths, total_grows);
+        println!();
     }
 }

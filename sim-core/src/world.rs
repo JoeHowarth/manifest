@@ -42,6 +42,13 @@ pub struct World {
     /// Per-(settlement, good) depth multiplier for external market response to price deviations.
     pub trade_depth_multipliers: HashMap<(SettlementId, GoodId), f64>,
 
+    /// Skip mortality phase for ticks <= this value, giving the economy time to stabilize.
+    pub mortality_grace_ticks: u64,
+
+    /// Priority queues for subsistence: pops keep their rank across ticks.
+    /// Leaving for employment means losing your spot; returning pops go to the back.
+    pub subsistence_queues: HashMap<SettlementId, Vec<PopId>>,
+
     // ID counters
     next_settlement_id: u32,
     next_agent_id: u32, // shared counter for PopId and MerchantId to avoid collisions
@@ -71,6 +78,8 @@ impl World {
             subsistence_reservation: None,
             stock_flow_history: Vec::new(),
             trade_depth_multipliers: HashMap::new(),
+            mortality_grace_ticks: 0,
+            subsistence_queues: HashMap::new(),
             next_settlement_id: 0,
             next_agent_id: 0, // shared counter for PopId and MerchantId
             next_facility_id: 0,
@@ -83,6 +92,41 @@ impl World {
 
     pub fn set_subsistence_reservation(&mut self, config: SubsistenceReservationConfig) {
         self.subsistence_reservation = Some(config);
+    }
+
+    /// Update subsistence priority queues for each settlement.
+    ///
+    /// Pops that stayed unemployed keep their position. Pops that left for
+    /// employment (or died) are removed. Newly unemployed pops are appended
+    /// at the back, sorted by PopId.
+    fn update_subsistence_queues(&mut self) {
+        for settlement in self.settlements.values() {
+            let existing = self.subsistence_queues.remove(&settlement.id).unwrap_or_default();
+
+            // Retain queue members that are still alive and still unemployed
+            let mut queue: Vec<PopId> = existing
+                .into_iter()
+                .filter(|id| {
+                    self.pops.get(id).is_some_and(|p| p.employed_at.is_none())
+                })
+                .collect();
+
+            let in_queue: std::collections::HashSet<PopId> = queue.iter().copied().collect();
+
+            // Append newly unemployed pops not in queue, sorted by PopId
+            let mut new_unemployed: Vec<PopId> = settlement.pop_ids
+                .iter()
+                .copied()
+                .filter(|id| {
+                    !in_queue.contains(id)
+                        && self.pops.get(id).is_some_and(|p| p.employed_at.is_none())
+                })
+                .collect();
+            new_unemployed.sort_by_key(|id| id.0);
+            queue.extend(new_unemployed);
+
+            self.subsistence_queues.insert(settlement.id, queue);
+        }
     }
 
     // === Simulation Tick ===
@@ -185,6 +229,8 @@ impl World {
                 };
 
             // Run the settlement tick
+            let subsistence_queue = self.subsistence_queues.get(&settlement_id)
+                .map(|q| q.as_slice());
             let _result = run_settlement_tick(
                 self.tick,
                 settlement_id,
@@ -197,6 +243,7 @@ impl World {
                 Some(&mut self.outside_flow_totals),
                 self.subsistence_reservation.as_ref(),
                 &depth_mults_for_settlement,
+                subsistence_queue,
             );
 
             // Put pops and merchants back
@@ -522,6 +569,9 @@ impl World {
             return;
         }
 
+        // Update subsistence priority queues before building reservation wages
+        self.update_subsistence_queues();
+
         // === PHASE 1: Generate bids with adaptive pricing ===
         // Track (facility_id, skill) -> (bids_generated, mvp) for outcome computation
         let mut facility_skill_bids: HashMap<(FacilityId, SkillId), (u32, Price)> = HashMap::new();
@@ -634,8 +684,12 @@ impl World {
                         .copied()
                         .unwrap_or(cfg.default_grain_price);
 
+                    let queue = self.subsistence_queues.get(&settlement.id)
+                        .map(|q| q.as_slice())
+                        .unwrap_or(&[]);
+
                     let ladder =
-                        build_subsistence_reservation_ladder(&employed_ids, &unemployed_ids, grain_price_ref, cfg);
+                        build_subsistence_reservation_ladder(&employed_ids, &unemployed_ids, grain_price_ref, cfg, queue);
                     by_pop.extend(ladder);
                 }
                 by_pop
@@ -971,6 +1025,11 @@ impl World {
     fn run_mortality_phase(&mut self) {
         use crate::mortality::{MortalityOutcome, check_mortality};
 
+        // Skip mortality during grace period
+        if self.tick <= self.mortality_grace_ticks {
+            return;
+        }
+
         // Skip mortality if no pops have food satisfaction tracked (no food need defined)
         let any_food_tracked = self
             .pops
@@ -1057,6 +1116,10 @@ impl World {
                 // Remove from settlement's pop list
                 if let Some(settlement) = self.settlements.get_mut(&pop.home_settlement) {
                     settlement.pop_ids.retain(|id| id != pop_id);
+                }
+                // Remove from subsistence queue
+                if let Some(queue) = self.subsistence_queues.get_mut(&pop.home_settlement) {
+                    queue.retain(|id| id != pop_id);
                 }
                 // Remove from facility employment
                 for facility in self.facilities.values_mut() {

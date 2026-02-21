@@ -5,7 +5,7 @@ use crate::consumption;
 use crate::external::{
     ExternalMarketConfig, OutsideAgentRole, OutsideFlowTotals, generate_outside_market_orders,
 };
-use crate::labor::{SubsistenceReservationConfig, ranked_subsistence_yields};
+use crate::labor::{SubsistenceReservationConfig, ordered_subsistence_yields, ranked_subsistence_yields};
 use crate::market::{self, Order, Side};
 use crate::needs::Need;
 use crate::types::{AgentId, GoodId, GoodProfile, PopId, Price, SettlementId};
@@ -226,6 +226,7 @@ pub fn run_settlement_tick(
     outside_flow_totals: Option<&mut OutsideFlowTotals>,
     subsistence_config: Option<&SubsistenceReservationConfig>,
     depth_multipliers: &HashMap<GoodId, f64>,
+    subsistence_queue: Option<&[PopId]>,
 ) -> market::MultiMarketResult {
     // 0. Production
 
@@ -237,7 +238,11 @@ pub fn run_settlement_tick(
             .map(|p| p.id)
             .collect();
 
-        let yields = ranked_subsistence_yields(&unemployed_ids, cfg.q_max, cfg.carrying_capacity);
+        let yields = if let Some(queue) = subsistence_queue {
+            ordered_subsistence_yields(queue, &unemployed_ids, cfg.q_max, cfg.carrying_capacity)
+        } else {
+            ranked_subsistence_yields(&unemployed_ids, cfg.q_max, cfg.carrying_capacity)
+        };
         let yield_map: HashMap<PopId, f64> = yields.into_iter().collect();
 
         for pop in pops.iter_mut() {
@@ -620,6 +625,7 @@ pub fn run_market_tick(
         None,
         None,
         &HashMap::new(),
+        None,
     )
 }
 
