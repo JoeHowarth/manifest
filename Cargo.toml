@@ -5,3 +5,15 @@ members = ["sim-core", "instrument"]
 [profile.release]
 opt-level = "s"
 lto = true
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.test]
+opt-level = 1
+
+[profile.test.package."*"]
+opt-level = 2

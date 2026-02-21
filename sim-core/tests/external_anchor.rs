@@ -77,6 +77,7 @@ fn price_ceiling_with_import_anchor() {
         Some(&config),
         Some(&mut flows),
         None,
+        &HashMap::new(),
     );
 
     let price = result
@@ -131,6 +132,7 @@ fn price_floor_with_export_anchor() {
         Some(&config),
         Some(&mut flows),
         None,
+        &HashMap::new(),
     );
 
     let price = result
@@ -186,6 +188,7 @@ fn outside_depth_is_respected() {
         Some(&config),
         Some(&mut flows),
         None,
+        &HashMap::new(),
     );
 
     let imported = flows
@@ -229,6 +232,7 @@ fn no_external_flow_when_disabled() {
         Some(&config),
         Some(&mut flows),
         None,
+        &HashMap::new(),
     );
 
     let imported = flows
@@ -276,6 +280,7 @@ fn external_anchor_influences_price_ema_but_local_clear_dominates() {
         Some(&config),
         None,
         None,
+        &HashMap::new(),
     );
 
     let local_price = result
@@ -333,6 +338,7 @@ fn anchored_no_trade_tick_still_moves_ema_toward_world() {
         Some(&config),
         None,
         None,
+        &HashMap::new(),
     );
 
     assert!(

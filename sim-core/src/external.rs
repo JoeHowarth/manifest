@@ -5,6 +5,13 @@ use crate::types::{GoodId, Price, Quantity, SettlementId};
 
 pub const OUTSIDE_BASE_AGENT_ID: u32 = u32::MAX;
 
+/// EMA blending rate for depth multiplier toward target each tick.
+pub const DEPTH_RESPONSE_ALPHA: f64 = 0.1;
+/// Elasticity of depth response to price deviation (sublinear).
+pub const DEPTH_RESPONSE_ELASTICITY: f64 = 0.5;
+/// Maximum depth multiplier cap.
+pub const DEPTH_RESPONSE_MAX_MULT: f64 = 10.0;
+
 /// Config for an anchored good in the outside market.
 #[derive(Debug, Clone)]
 pub struct AnchoredGoodConfig {
@@ -127,11 +134,33 @@ fn export_agent_id(good: GoodId) -> u32 {
     OUTSIDE_BASE_AGENT_ID.saturating_sub(offset)
 }
 
+/// Update the trade depth multiplier based on price deviation from world price.
+/// Returns the new multiplier after EMA blending toward the target.
+pub fn compute_depth_multiplier(
+    current_mult: f64,
+    local_price: Option<Price>,
+    world_price: Price,
+) -> f64 {
+    let Some(local) = local_price else {
+        return current_mult; // no signal, keep current
+    };
+    if world_price <= 0.0 || local <= 0.0 {
+        return current_mult;
+    }
+    let ratio = local / world_price;
+    let deviation = ratio.max(1.0 / ratio); // always >= 1.0
+    let target = deviation
+        .powf(DEPTH_RESPONSE_ELASTICITY)
+        .min(DEPTH_RESPONSE_MAX_MULT);
+    DEPTH_RESPONSE_ALPHA * target + (1.0 - DEPTH_RESPONSE_ALPHA) * current_mult
+}
+
 /// Build outside import/export ladders for enabled settlement+goods.
 pub fn generate_outside_market_orders(
     settlement: SettlementId,
     pop_count: usize,
     config: Option<&ExternalMarketConfig>,
+    depth_multipliers: &HashMap<GoodId, f64>,
 ) -> OutsideMarketOrders {
     let Some(config) = config else {
         return OutsideMarketOrders::default();
@@ -146,7 +175,8 @@ pub fn generate_outside_market_orders(
 
     for (&good, anchor) in &config.anchors {
         let tiers = anchor.tiers.max(1);
-        let max_depth = anchor.base_depth + anchor.depth_per_pop * pop_count as f64;
+        let mult = depth_multipliers.get(&good).copied().unwrap_or(1.0);
+        let max_depth = (anchor.base_depth + anchor.depth_per_pop * pop_count as f64) * mult;
         if max_depth <= 0.0 || anchor.world_price <= 0.0 {
             continue;
         }
@@ -207,4 +237,99 @@ pub fn generate_outside_market_orders(
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn depth_mult_no_signal_returns_current() {
+        let result = compute_depth_multiplier(2.5, None, 10.0);
+        assert!((result - 2.5).abs() < 1e-12, "no signal should keep current: {result}");
+    }
+
+    #[test]
+    fn depth_mult_at_world_price_decays_toward_one() {
+        // local == world => deviation = 1.0, target = 1.0^0.5 = 1.0
+        // new = 0.2 * 1.0 + 0.8 * 3.0 = 2.6
+        let result = compute_depth_multiplier(3.0, Some(10.0), 10.0);
+        let expected = DEPTH_RESPONSE_ALPHA * 1.0 + (1.0 - DEPTH_RESPONSE_ALPHA) * 3.0;
+        assert!(
+            (result - expected).abs() < 1e-12,
+            "at world price, mult should decay toward 1.0: result={result}, expected={expected}"
+        );
+        assert!(result < 3.0, "multiplier should decrease toward 1.0");
+    }
+
+    #[test]
+    fn depth_mult_local_low_price() {
+        // local = 1.0, world = 10.0 => ratio = 0.1, 1/ratio = 10, deviation = 10
+        // target = 10^0.5 = 3.162..
+        // new = 0.2 * 3.162 + 0.8 * 1.0 = 1.4325..
+        let result = compute_depth_multiplier(1.0, Some(1.0), 10.0);
+        let target = 10.0_f64.powf(0.5);
+        let expected = DEPTH_RESPONSE_ALPHA * target + (1.0 - DEPTH_RESPONSE_ALPHA) * 1.0;
+        assert!(
+            (result - expected).abs() < 1e-9,
+            "low local price: result={result}, expected={expected}"
+        );
+    }
+
+    #[test]
+    fn depth_mult_local_high_price() {
+        // local = 100.0, world = 10.0 => ratio = 10, deviation = 10
+        // Same deviation as above
+        let result = compute_depth_multiplier(1.0, Some(100.0), 10.0);
+        let target = 10.0_f64.powf(0.5);
+        let expected = DEPTH_RESPONSE_ALPHA * target + (1.0 - DEPTH_RESPONSE_ALPHA) * 1.0;
+        assert!(
+            (result - expected).abs() < 1e-9,
+            "high local price: result={result}, expected={expected}"
+        );
+    }
+
+    #[test]
+    fn depth_mult_cap_at_max() {
+        // Extreme deviation: local = 0.001, world = 10.0 => ratio = 0.0001, 1/ratio = 10000
+        // target = 10000^0.5 = 100, capped at MAX_MULT
+        let result = compute_depth_multiplier(1.0, Some(0.001), 10.0);
+        let expected = DEPTH_RESPONSE_ALPHA * DEPTH_RESPONSE_MAX_MULT
+            + (1.0 - DEPTH_RESPONSE_ALPHA) * 1.0;
+        assert!(
+            (result - expected).abs() < 1e-9,
+            "cap test: result={result}, expected={expected}"
+        );
+    }
+
+    #[test]
+    fn depth_mult_ema_accumulates() {
+        // Simulate several ticks at a constant deviation to show EMA accumulation
+        let mut mult = 1.0;
+        let local = Some(1.0);
+        let world = 10.0;
+        let target = 10.0_f64.powf(DEPTH_RESPONSE_ELASTICITY);
+
+        for _ in 0..50 {
+            mult = compute_depth_multiplier(mult, local, world);
+        }
+
+        // After many ticks the multiplier should converge close to target
+        assert!(
+            (mult - target).abs() < 0.05,
+            "after 50 ticks mult should be near target={target:.4}: mult={mult:.4}"
+        );
+    }
+
+    #[test]
+    fn depth_mult_zero_world_price_unchanged() {
+        let result = compute_depth_multiplier(2.0, Some(5.0), 0.0);
+        assert!((result - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn depth_mult_zero_local_price_unchanged() {
+        let result = compute_depth_multiplier(2.0, Some(0.0), 10.0);
+        assert!((result - 2.0).abs() < 1e-12);
+    }
 }

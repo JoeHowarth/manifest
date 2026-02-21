@@ -39,6 +39,8 @@ pub struct World {
     pub outside_flow_totals: OutsideFlowTotals,
     pub subsistence_reservation: Option<SubsistenceReservationConfig>,
     pub stock_flow_history: Vec<TickStockFlow>,
+    /// Per-(settlement, good) depth multiplier for external market response to price deviations.
+    pub trade_depth_multipliers: HashMap<(SettlementId, GoodId), f64>,
 
     // ID counters
     next_settlement_id: u32,
@@ -68,6 +70,7 @@ impl World {
             outside_flow_totals: OutsideFlowTotals::default(),
             subsistence_reservation: None,
             stock_flow_history: Vec::new(),
+            trade_depth_multipliers: HashMap::new(),
             next_settlement_id: 0,
             next_agent_id: 0, // shared counter for PopId and MerchantId
             next_facility_id: 0,
@@ -104,7 +107,7 @@ impl World {
         let pre_tick_snapshot = capture_world_flow_snapshot(self);
 
         // === 0. LABOR PHASE ===
-        self.run_labor_phase();
+        self.run_labor_phase(recipes);
 
         // === 1. PRODUCTION PHASE ===
         self.run_production_phase(recipes);
@@ -154,6 +157,33 @@ impl World {
             let mut merchant_refs: Vec<&mut MerchantAgent> =
                 extracted_merchants.iter_mut().map(|(_, m)| m).collect();
 
+            // Update trade depth multipliers for this settlement
+            let depth_mults_for_settlement: HashMap<GoodId, f64> =
+                if let Some(config) = &external_market {
+                    config
+                        .anchors
+                        .iter()
+                        .map(|(&good, anchor)| {
+                            let key = (settlement_id, good);
+                            let current = self
+                                .trade_depth_multipliers
+                                .get(&key)
+                                .copied()
+                                .unwrap_or(1.0);
+                            let local_price = settlement_prices.get(&good).copied();
+                            let new_mult = crate::external::compute_depth_multiplier(
+                                current,
+                                local_price,
+                                anchor.world_price,
+                            );
+                            self.trade_depth_multipliers.insert(key, new_mult);
+                            (good, new_mult)
+                        })
+                        .collect()
+                } else {
+                    HashMap::new()
+                };
+
             // Run the settlement tick
             let _result = run_settlement_tick(
                 self.tick,
@@ -166,6 +196,7 @@ impl World {
                 external_market.as_ref(),
                 Some(&mut self.outside_flow_totals),
                 self.subsistence_reservation.as_ref(),
+                &depth_mults_for_settlement,
             );
 
             // Put pops and merchants back
@@ -470,7 +501,7 @@ impl World {
     /// - Merchant must allocate capital across facilities
     /// - Facilities can fail due to liquidity crises
     /// - Player/AI decides when to fund vs abandon struggling facilities
-    fn run_labor_phase(&mut self) {
+    fn run_labor_phase(&mut self, recipes: &[Recipe]) {
         use crate::labor::{
             LaborBid, SkillDef, build_subsistence_reservation_ladder, clear_labor_markets,
             generate_pop_asks_with_min_wage, update_wage_emas,
@@ -522,9 +553,24 @@ impl World {
 
             let max_workers = facility.capacity.min(50);
 
+            // Compute output-per-worker from the facility's primary recipe
+            let output_per_worker = facility
+                .recipe_priorities
+                .first()
+                .and_then(|rid| recipes.iter().find(|r| r.id == *rid))
+                .map(|recipe| {
+                    let total_output: f64 = recipe.outputs.iter().map(|(_, qty)| qty).sum();
+                    let total_workers: u32 = recipe.workers.values().sum();
+                    if total_workers > 0 {
+                        total_output / total_workers as f64
+                    } else {
+                        1.0
+                    }
+                })
+                .unwrap_or(1.0);
+
             for skill in &skills {
-                // MVP = output_price for all slots (simplified, no diminishing returns)
-                let mvp = output_price;
+                let mvp = output_per_worker * output_price;
 
                 // Get adaptive bid from state
                 let wage_ema = self.wage_ema.get(&skill.id).copied().unwrap_or(1.0);
@@ -578,6 +624,10 @@ impl World {
                         continue;
                     }
 
+                    let (employed_ids, unemployed_ids): (Vec<PopId>, Vec<PopId>) = active_ids
+                        .into_iter()
+                        .partition(|id| self.pops.get(id).map_or(false, |p| p.employed_at.is_some()));
+
                     let grain_price_ref = self
                         .price_ema
                         .get(&(settlement.id, cfg.grain_good))
@@ -585,7 +635,7 @@ impl World {
                         .unwrap_or(cfg.default_grain_price);
 
                     let ladder =
-                        build_subsistence_reservation_ladder(&active_ids, grain_price_ref, cfg);
+                        build_subsistence_reservation_ladder(&employed_ids, &unemployed_ids, grain_price_ref, cfg);
                     by_pop.extend(ladder);
                 }
                 by_pop
@@ -599,6 +649,7 @@ impl World {
             let reservation = subsistence_reservation_by_pop
                 .get(&pop.id)
                 .copied()
+                .map(|r| r.max(pop.min_wage))
                 .unwrap_or(pop.min_wage);
             let mut pop_asks = generate_pop_asks_with_min_wage(pop, &mut next_ask_id, reservation);
 
@@ -662,10 +713,15 @@ impl World {
         }
 
         // === PHASE 5: Record outcomes and adjust bids ===
-        // Compute global excess workers
         let total_workers: u32 = asks.len() as u32;
-        let total_jobs: u32 = bids.len() as u32;
-        let global_excess_workers = total_workers > total_jobs;
+
+        // Count workers hired per merchant (for monopsony detection)
+        let mut workers_per_merchant: HashMap<MerchantId, u32> = HashMap::new();
+        for assignment in &result.assignments {
+            if let Some(facility) = self.facilities.get(&assignment.facility_id) {
+                *workers_per_merchant.entry(facility.owner).or_insert(0) += 1;
+            }
+        }
 
         for ((facility_id, skill_id), (wanted, mvp)) in &facility_skill_bids {
             let filled = fills.get(&(*facility_id, *skill_id)).copied().unwrap_or(0);
@@ -695,6 +751,7 @@ impl World {
                     filled,
                     profitable_unfilled,
                     marginal_profitable_mvp,
+                    *mvp,
                 );
 
                 #[cfg(feature = "instrument")]
@@ -712,12 +769,23 @@ impl World {
         }
 
         // Adjust bids for next tick
+        let mut rng = rand::rng();
         for (facility_id, bid_state) in self.facility_bid_states.iter_mut() {
+            // Monopsony detection: can this facility's owner attract workers
+            // by raising wages? Only if there are workers NOT employed by this
+            // owner (either unemployed or at competing merchants).
+            let my_merchant = self.facilities.get(facility_id).map(|f| f.owner);
+            let my_workers = my_merchant
+                .and_then(|m| workers_per_merchant.get(&m))
+                .copied()
+                .unwrap_or(0);
+            let can_attract_workers = total_workers > my_workers;
+
             for skill in &skills {
                 let wage_ema = self.wage_ema.get(&skill.id).copied().unwrap_or(1.0);
                 // Only adjust if this facility had bids for this skill
                 if facility_skill_bids.contains_key(&(*facility_id, skill.id)) {
-                    bid_state.adjust_bid(skill.id, wage_ema, global_excess_workers);
+                    bid_state.adjust_bid(&mut rng, skill.id, wage_ema, can_attract_workers);
                 }
             }
         }

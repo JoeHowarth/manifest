@@ -105,6 +105,8 @@ pub use geography::{ResourceQuality, ResourceSlot, ResourceType, Route, Settleme
 // External market
 pub use external::{
     AnchoredGoodConfig, ExternalMarketConfig, OutsideFlowTotals, SettlementFriction,
+    compute_depth_multiplier,
+    DEPTH_RESPONSE_ALPHA, DEPTH_RESPONSE_ELASTICITY, DEPTH_RESPONSE_MAX_MULT,
 };
 
 // Production

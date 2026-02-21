@@ -50,14 +50,15 @@ fn invariant_currency_conserved_under_population_growth() {
     );
 
     let initial_currency = total_currency(&world);
-    world.run_tick(&good_profiles, &needs, &Vec::<Recipe>::new());
-    let final_currency = total_currency(&world);
-
-    let diff = (final_currency - initial_currency).abs();
-    assert!(
-        diff < 1e-6,
-        "Currency should be conserved even with growth: initial={initial_currency:.2}, final={final_currency:.2}, diff={diff:.2}"
-    );
+    for tick in 0..20 {
+        world.run_tick(&good_profiles, &needs, &Vec::<Recipe>::new());
+        let current_currency = total_currency(&world);
+        let diff = (current_currency - initial_currency).abs();
+        assert!(
+            diff < 1e-6,
+            "Currency should be conserved even with growth at tick {tick}: initial={initial_currency:.2}, current={current_currency:.2}, diff={diff:.6}"
+        );
+    }
 }
 
 #[test]
@@ -98,6 +99,7 @@ fn invariant_pop_cannot_sell_more_than_inventory() {
         None,
         None,
         None,
+        &HashMap::new(),
     );
 
     let remaining = seller.stocks.get(&GRAIN).copied().unwrap_or(0.0);
@@ -271,42 +273,45 @@ fn invariant_external_flow_matches_local_currency_delta() {
         },
     );
 
-    let initial_currency = seller.currency + buyer.currency;
-    let mut flows = OutsideFlowTotals::default();
-    let mut pops: Vec<&mut Pop> = vec![&mut seller, &mut buyer];
-    let mut merchants = Vec::new();
-    let _ = run_settlement_tick(
-        1,
-        settlement,
-        &mut pops,
-        &mut merchants,
-        &good_profiles,
-        &needs,
-        &mut price_ema,
-        Some(&external),
-        Some(&mut flows),
-        None,
-    );
-    let final_currency = seller.currency + buyer.currency;
-    let currency_delta = final_currency - initial_currency;
+    for tick in 1..=10 {
+        let pre_currency = seller.currency + buyer.currency;
+        let mut flows = OutsideFlowTotals::default();
+        let mut pops: Vec<&mut Pop> = vec![&mut seller, &mut buyer];
+        let mut merchants = Vec::new();
+        let _ = run_settlement_tick(
+            tick,
+            settlement,
+            &mut pops,
+            &mut merchants,
+            &good_profiles,
+            &needs,
+            &mut price_ema,
+            Some(&external),
+            Some(&mut flows),
+            None,
+            &HashMap::new(),
+        );
+        let post_currency = seller.currency + buyer.currency;
+        let currency_delta = post_currency - pre_currency;
 
-    let exports_value = flows
-        .exports_value
-        .get(&(settlement, GRAIN))
-        .copied()
-        .unwrap_or(0.0);
-    let imports_value = flows
-        .imports_value
-        .get(&(settlement, GRAIN))
-        .copied()
-        .unwrap_or(0.0);
-    let expected_delta = exports_value - imports_value;
+        let exports_value = flows
+            .exports_value
+            .get(&(settlement, GRAIN))
+            .copied()
+            .unwrap_or(0.0);
+        let imports_value = flows
+            .imports_value
+            .get(&(settlement, GRAIN))
+            .copied()
+            .unwrap_or(0.0);
+        let expected_delta = exports_value - imports_value;
 
-    let diff = (currency_delta - expected_delta).abs();
-    assert!(
-        diff < 1e-6,
-        "External flow accounting mismatch: currency_delta={currency_delta:.6}, expected={expected_delta:.6}, diff={diff:.6}"
-    );
+        let diff = (currency_delta - expected_delta).abs();
+        assert!(
+            diff < 1e-6,
+            "External flow accounting mismatch at tick {tick}: currency_delta={currency_delta:.6}, expected={expected_delta:.6}, diff={diff:.6}"
+        );
+    }
 }
 
 #[test]
@@ -331,12 +336,7 @@ fn invariant_subsistence_allocates_more_to_earlier_pops() {
     pop_b.desired_consumption_ema.insert(GRAIN, 0.0);
     pop_c.desired_consumption_ema.insert(GRAIN, 0.0);
 
-    let subsistence = SubsistenceReservationConfig {
-        grain_good: GRAIN,
-        q_max: 3.0,
-        crowding_alpha: 1.0,
-        default_grain_price: 10.0,
-    };
+    let subsistence = SubsistenceReservationConfig::new(GRAIN, 1.5, 3, 10.0);
 
     let mut pops: Vec<&mut Pop> = vec![&mut pop_a, &mut pop_b, &mut pop_c];
     let mut merchants = Vec::new();
@@ -351,6 +351,7 @@ fn invariant_subsistence_allocates_more_to_earlier_pops() {
         None,
         None,
         Some(&subsistence),
+        &HashMap::new(),
     );
 
     let a = pop_a.stocks.get(&GRAIN).copied().unwrap_or(0.0);

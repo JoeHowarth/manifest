@@ -225,6 +225,7 @@ pub fn run_settlement_tick(
     external_market: Option<&ExternalMarketConfig>,
     outside_flow_totals: Option<&mut OutsideFlowTotals>,
     subsistence_config: Option<&SubsistenceReservationConfig>,
+    depth_multipliers: &HashMap<GoodId, f64>,
 ) -> market::MultiMarketResult {
     // 0. Production
 
@@ -236,7 +237,7 @@ pub fn run_settlement_tick(
             .map(|p| p.id)
             .collect();
 
-        let yields = ranked_subsistence_yields(&unemployed_ids, cfg.q_max, cfg.crowding_alpha);
+        let yields = ranked_subsistence_yields(&unemployed_ids, cfg.q_max, cfg.crowding_alpha());
         let yield_map: HashMap<PopId, f64> = yields.into_iter().collect();
 
         for pop in pops.iter_mut() {
@@ -370,7 +371,7 @@ pub fn run_settlement_tick(
     }
 
     // Inject outside market ladders (if enabled for this settlement)
-    let outside_market = generate_outside_market_orders(settlement, pops.len(), external_market);
+    let outside_market = generate_outside_market_orders(settlement, pops.len(), external_market, depth_multipliers);
     for mut order in outside_market.orders {
         order.id = next_order_id;
         next_order_id += 1;
@@ -618,6 +619,7 @@ pub fn run_market_tick(
         None,
         None,
         None,
+        &HashMap::new(),
     )
 }
 

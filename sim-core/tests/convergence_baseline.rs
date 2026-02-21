@@ -155,6 +155,7 @@ fn run_trial(seed: u64) -> TrialMetrics {
             Some(&external),
             None,
             None,
+            &HashMap::new(),
         );
 
         let price = price_ema.get(&GRAIN).copied().unwrap_or(0.0);

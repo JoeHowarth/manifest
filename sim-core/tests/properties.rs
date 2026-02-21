@@ -170,7 +170,7 @@ fn money_conservation_single_settlement() {
         let diff = (current_currency - initial_currency).abs();
 
         assert!(
-            diff < 0.01,
+            diff < 1e-4,
             "Money not conserved at tick {}: initial={:.2}, current={:.2}, diff={:.4}",
             tick,
             initial_currency,
@@ -195,7 +195,7 @@ fn money_conservation_multiple_settlements() {
         let diff = (current_currency - initial_currency).abs();
 
         assert!(
-            diff < 0.01,
+            diff < 1e-4,
             "Money not conserved at tick {} with multiple settlements: initial={:.2}, current={:.2}, diff={:.4}",
             tick,
             initial_currency,
@@ -410,15 +410,9 @@ fn isolated_settlements_dont_affect_each_other() {
     let good_profiles = create_good_profiles();
     let needs = create_needs();
 
-    // Track London's state (for potential future assertions)
-    let _london_initial_currency = world.get_pop(london_pop).unwrap().currency;
-    let _london_initial_grain = world
-        .get_pop(london_pop)
-        .unwrap()
-        .stocks
-        .get(&GRAIN)
-        .copied()
-        .unwrap_or(0.0);
+    // Track initial state for isolation assertions
+    let london_initial_currency = world.get_pop(london_pop).unwrap().currency;
+    let paris_initial_currency = world.get_pop(paris_pop).unwrap().currency;
 
     // Run ticks
     for _ in 0..10 {
@@ -436,6 +430,17 @@ fn isolated_settlements_dont_affect_each_other() {
         "London currency went negative"
     );
     assert!(paris_final.currency >= 0.0, "Paris currency went negative");
+
+    assert!(
+        (london_final.currency - london_initial_currency).abs() < 1e-6,
+        "London currency changed without trade: initial={:.6}, final={:.6}",
+        london_initial_currency, london_final.currency,
+    );
+    assert!(
+        (paris_final.currency - paris_initial_currency).abs() < 1e-6,
+        "Paris currency changed without trade: initial={:.6}, final={:.6}",
+        paris_initial_currency, paris_final.currency,
+    );
 }
 
 // === STATISTICAL PROPERTIES ===
@@ -472,7 +477,7 @@ fn prices_tend_toward_stability() {
         // Late variance should not be dramatically higher than early variance
         // (prices shouldn't explode)
         assert!(
-            late_variance < early_variance * 10.0 + 1.0,
+            late_variance < early_variance * 2.0 + 0.01,
             "Price variance exploded: early={:.4}, late={:.4}",
             early_variance,
             late_variance
