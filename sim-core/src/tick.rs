@@ -237,7 +237,7 @@ pub fn run_settlement_tick(
             .map(|p| p.id)
             .collect();
 
-        let yields = ranked_subsistence_yields(&unemployed_ids, cfg.q_max, cfg.crowding_alpha());
+        let yields = ranked_subsistence_yields(&unemployed_ids, cfg.q_max, cfg.carrying_capacity);
         let yield_map: HashMap<PopId, f64> = yields.into_iter().collect();
 
         for pop in pops.iter_mut() {

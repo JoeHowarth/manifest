@@ -86,7 +86,7 @@ Code: `sim-core/src/tick.rs`.
 
 - If enabled, unemployed pops receive grain directly into `pop.stocks`.
 - Ranked yields come from `ranked_subsistence_yields`:
-  `q(rank) = q_max / (1 + crowding_alpha * (rank - 1))`.
+  `q(rank) = q_max` for rank <= K, linear dropoff to 0 at rank = 2K.
 
 #### 3b) Consumption
 
@@ -219,8 +219,8 @@ Mortality:
 
 Subsistence reservation config defaults:
 - `grain_good = 1`.
-- `q_max = 2.0`.
-- `crowding_alpha = 0.02`.
+- `q_max = 1.5`.
+- `carrying_capacity = 40`.
 - `default_grain_price = 10.0`.
 
 External anchor defaults:

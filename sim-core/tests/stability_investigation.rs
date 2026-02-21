@@ -2836,13 +2836,13 @@ fn investigate_backstop_subsistence_labor() {
 
     // Configure anchor + subsistence
     configure_anchor(&mut world, settlement, 0.10, 9000.0);
-    world.set_subsistence_reservation(SubsistenceReservationConfig::new(GRAIN, 1.02, 10, 10.0));
+    world.set_subsistence_reservation(SubsistenceReservationConfig::new(GRAIN, 1.0, 50, 10.0));
 
     let recipes = vec![common::make_grain_recipe(production_rate)];
     let good_profiles = common::make_grain_profile();
     let needs = common::make_food_need(1.0);
 
-    let rec_name = format!("backstop_subsistence_q102_p{num_pops}");
+    let rec_name = format!("backstop_subsistence_q08_p{num_pops}");
     let mut rec = ScopedRecorder::new("data/investigation", &rec_name);
 
     for _ in 0..ticks {
@@ -2850,121 +2850,159 @@ fn investigate_backstop_subsistence_labor() {
     }
     let dfs = rec.get();
 
-    println!("\n=== Backstop Subsistence Labor Investigation ===");
-    println!("  q_max=1.02, production_rate={production_rate}, pops={num_pops}, capacity=100");
-    println!("  Margin: MVP - reservation = (1.05 - 1.02) * price = 3% of price\n");
+    println!("\n=== Merchant Currency Drain Investigation ===");
+    println!("  q_max=1.0, K=50, production_rate={production_rate}, pops={num_pops}, capacity=100");
+    println!("  Reservation wage = 1.0 * grain_price (subsistence is credible outside option)");
+    println!("  Initial: merchant_currency=10000, pop_currency=100*100=10000\n");
 
-    // --- Labor bids: what are facilities offering? ---
     let sample_ticks: Vec<usize> = (0..ticks).step_by(20).chain(std::iter::once(ticks - 1)).collect();
 
-    if let Some(labor_bid) = dfs.get("labor_bid") {
-        let bids_summary = labor_bid
-            .clone()
-            .lazy()
-            .group_by([col("tick")])
-            .agg([
-                col("max_wage").mean().alias("avg_bid"),
-                col("max_wage").min().alias("min_bid"),
-                col("max_wage").max().alias("max_bid"),
-                col("mvp").mean().alias("avg_mvp"),
-                col("adaptive_bid").mean().alias("avg_adaptive"),
-                col("bid_id").count().alias("n_bids"),
-            ])
+    // === 1. CURRENCY ACCOUNTING: where is the money? ===
+    if let Some(stock_flow) = dfs.get("stock_flow") {
+        let sf = stock_flow.clone().lazy()
             .sort(["tick"], Default::default())
-            .collect()
-            .unwrap();
+            .collect().unwrap();
 
-        let bid_ticks = col_f64(&bids_summary, "tick");
-        let avg_bids = col_f64(&bids_summary, "avg_bid");
-        let avg_mvps = col_f64(&bids_summary, "avg_mvp");
-        let avg_adaptive = col_f64(&bids_summary, "avg_adaptive");
-        let n_bids = col_f64(&bids_summary, "n_bids");
+        let ticks_v = col_f64(&sf, "tick");
+        let m_cur_before = col_f64(&sf, "merchant_currency_before");
+        let m_cur_after = col_f64(&sf, "merchant_currency_after");
+        let p_cur_before = col_f64(&sf, "pop_currency_before");
+        let p_cur_after = col_f64(&sf, "pop_currency_after");
+        let total_before = col_f64(&sf, "currency_before");
+        let total_after = col_f64(&sf, "currency_after");
 
-        println!("Labor bids (facility offers):");
-        println!("  {:>4} {:>8} {:>8} {:>8} {:>6}",
-            "tick", "avg_bid", "avg_mvp", "adaptive", "n_bids");
+        println!("Currency positions (before → after each tick):");
+        println!("  {:>4} {:>10} {:>10} {:>10} {:>10} {:>10}",
+            "tick", "merch_cur", "pop_cur", "total_cur", "m_delta", "leak");
         for &t in &sample_ticks {
-            if let Some(i) = bid_ticks.iter().position(|&x| x as usize == t) {
-                println!("  {:>4} {:>8.4} {:>8.4} {:>8.4} {:>6.0}",
-                    t, avg_bids[i], avg_mvps[i], avg_adaptive[i], n_bids[i]);
+            if let Some(i) = ticks_v.iter().position(|&x| x as usize == t) {
+                let m_delta = m_cur_after[i] - m_cur_before[i];
+                let leak = total_after[i] - total_before[i];
+                println!("  {:>4} {:>10.1} {:>10.1} {:>10.1} {:>10.2} {:>10.2}",
+                    t, m_cur_after[i], p_cur_after[i], total_after[i], m_delta, leak);
             }
         }
     } else {
-        println!("  No labor_bid dataframe");
+        println!("  No stock_flow dataframe");
     }
 
-    // --- Labor asks: what are pops demanding? ---
-    if let Some(labor_ask) = dfs.get("labor_ask") {
-        let asks_summary = labor_ask
-            .clone()
-            .lazy()
+    // === 2. MERCHANT GRAIN: market revenue vs wage cost ===
+    // Merchant sell revenue: fills where agent_type=merchant and side=sell
+    // Merchant wage cost: sum of wages from assignment df
+    if let (Some(fill_df), Some(assignment_df)) = (dfs.get("fill"), dfs.get("assignment")) {
+        let merchant_revenue = fill_df.clone().lazy()
+            .filter(col("agent_type").eq(lit("merchant")).and(col("side").eq(lit("sell"))))
+            .with_column((col("quantity") * col("price")).alias("revenue"))
             .group_by([col("tick")])
             .agg([
-                col("min_wage").mean().alias("avg_ask"),
-                col("min_wage").min().alias("min_ask"),
-                col("min_wage").max().alias("max_ask"),
-                col("ask_id").count().alias("n_asks"),
+                col("revenue").sum().alias("sell_revenue"),
+                col("quantity").sum().alias("grain_sold"),
             ])
             .sort(["tick"], Default::default())
-            .collect()
-            .unwrap();
+            .collect().unwrap();
 
-        let ask_ticks = col_f64(&asks_summary, "tick");
-        let avg_asks = col_f64(&asks_summary, "avg_ask");
-        let min_asks = col_f64(&asks_summary, "min_ask");
-        let max_asks = col_f64(&asks_summary, "max_ask");
-        let n_asks = col_f64(&asks_summary, "n_asks");
-
-        println!("\nLabor asks (pop reservations):");
-        println!("  {:>4} {:>8} {:>8} {:>8} {:>6}",
-            "tick", "avg_ask", "min_ask", "max_ask", "n_asks");
-        for &t in &sample_ticks {
-            if let Some(i) = ask_ticks.iter().position(|&x| x as usize == t) {
-                println!("  {:>4} {:>8.4} {:>8.4} {:>8.4} {:>6.0}",
-                    t, avg_asks[i], min_asks[i], max_asks[i], n_asks[i]);
-            }
-        }
-    } else {
-        println!("  No labor_ask dataframe");
-    }
-
-    // --- Assignments: who got hired? ---
-    if let Some(assignment) = dfs.get("assignment") {
-        let emp_by_tick = assignment
-            .clone()
-            .lazy()
+        let wage_cost = assignment_df.clone().lazy()
             .group_by([col("tick")])
             .agg([
+                col("wage").sum().alias("total_wages"),
                 col("pop_id").count().alias("employed"),
-                col("wage").mean().alias("avg_wage"),
-                col("wage").min().alias("min_wage"),
             ])
             .sort(["tick"], Default::default())
-            .collect()
-            .unwrap();
+            .collect().unwrap();
 
-        let emp_ticks = col_f64(&emp_by_tick, "tick");
-        let emp_counts = col_f64(&emp_by_tick, "employed");
-        let avg_wages = col_f64(&emp_by_tick, "avg_wage");
+        let rev_ticks = col_f64(&merchant_revenue, "tick");
+        let revenues = col_f64(&merchant_revenue, "sell_revenue");
+        let grain_sold = col_f64(&merchant_revenue, "grain_sold");
+        let wage_ticks = col_f64(&wage_cost, "tick");
+        let wages = col_f64(&wage_cost, "total_wages");
+        let employed = col_f64(&wage_cost, "employed");
 
-        println!("\nAssignments:");
-        println!("  {:>4} {:>8} {:>8}",
-            "tick", "employed", "avg_wage");
+        println!("\nMerchant P&L per tick (revenue from grain sales vs wage cost):");
+        println!("  {:>4} {:>8} {:>10} {:>10} {:>10} {:>8}",
+            "tick", "employed", "wages_out", "grain_rev", "net_P&L", "grain_sold");
         for &t in &sample_ticks {
-            if let Some(i) = emp_ticks.iter().position(|&x| x as usize == t) {
-                println!("  {:>4} {:>8.0} {:>8.4}",
-                    t, emp_counts[i], avg_wages[i]);
-            }
+            let rev = rev_ticks.iter().position(|&x| x as usize == t)
+                .map(|i| (revenues[i], grain_sold[i])).unwrap_or((0.0, 0.0));
+            let wage = wage_ticks.iter().position(|&x| x as usize == t)
+                .map(|i| (wages[i], employed[i])).unwrap_or((0.0, 0.0));
+            let net = rev.0 - wage.0;
+            println!("  {:>4} {:>8.0} {:>10.2} {:>10.2} {:>10.2} {:>8.1}",
+                t, wage.1, wage.0, rev.0, net, rev.1);
         }
-    } else {
-        println!("  No assignment dataframe");
+
+        // Also check: is the merchant BUYING grain? (import cost)
+        let merchant_buys = fill_df.clone().lazy()
+            .filter(col("agent_type").eq(lit("merchant")).and(col("side").eq(lit("buy"))))
+            .with_column((col("quantity") * col("price")).alias("cost"))
+            .group_by([col("tick")])
+            .agg([
+                col("cost").sum().alias("buy_cost"),
+                col("quantity").sum().alias("grain_bought"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect().unwrap();
+
+        if merchant_buys.height() > 0 {
+            let buy_ticks = col_f64(&merchant_buys, "tick");
+            let buy_costs = col_f64(&merchant_buys, "buy_cost");
+            let grain_bought = col_f64(&merchant_buys, "grain_bought");
+            println!("\nMerchant BUY orders (grain purchases from market):");
+            println!("  {:>4} {:>10} {:>10}",
+                "tick", "grain_bought", "cost");
+            for &t in &sample_ticks {
+                if let Some(i) = buy_ticks.iter().position(|&x| x as usize == t) {
+                    println!("  {:>4} {:>10.2} {:>10.2}",
+                        t, grain_bought[i], buy_costs[i]);
+                }
+            }
+        } else {
+            println!("\nMerchant made NO buy orders (not purchasing grain on market)");
+        }
     }
 
-    // --- Mortality: what's happening to population? ---
+    // === 3. EXTERNAL FLOWS: where is currency leaving the settlement? ===
+    if let Some(ext_flow) = dfs.get("external_flow") {
+        let imports = ext_flow.clone().lazy()
+            .filter(col("flow").eq(lit("import")))
+            .group_by([col("tick")])
+            .agg([
+                col("quantity").sum().alias("import_qty"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect().unwrap();
+
+        let exports = ext_flow.clone().lazy()
+            .filter(col("flow").eq(lit("export")))
+            .group_by([col("tick")])
+            .agg([
+                col("quantity").sum().alias("export_qty"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect().unwrap();
+
+        let imp_ticks = col_f64(&imports, "tick");
+        let imp_qty = col_f64(&imports, "import_qty");
+        let exp_ticks = col_f64(&exports, "tick");
+        let exp_qty = col_f64(&exports, "export_qty");
+
+        println!("\nExternal flows (imports bring grain in + currency out; exports send grain out + currency in):");
+        println!("  {:>4} {:>10} {:>10} {:>10}",
+            "tick", "import_qty", "export_qty", "net_import");
+        for &t in &sample_ticks {
+            let imp = imp_ticks.iter().position(|&x| x as usize == t)
+                .map(|i| imp_qty[i]).unwrap_or(0.0);
+            let exp = exp_ticks.iter().position(|&x| x as usize == t)
+                .map(|i| exp_qty[i]).unwrap_or(0.0);
+            println!("  {:>4} {:>10.3} {:>10.3} {:>10.3}",
+                t, imp, exp, imp - exp);
+        }
+    } else {
+        println!("\n  No external_flow dataframe");
+    }
+
+    // === 4. MORTALITY + POPULATION (compact) ===
     if let Some(mortality) = dfs.get("mortality") {
-        let mort_by_tick = mortality
-            .clone()
-            .lazy()
+        let mort_by_tick = mortality.clone().lazy()
             .group_by([col("tick")])
             .agg([
                 col("pop_id").count().alias("total"),
@@ -2974,8 +3012,7 @@ fn investigate_backstop_subsistence_labor() {
                 col("food_satisfaction").min().alias("min_sat"),
             ])
             .sort(["tick"], Default::default())
-            .collect()
-            .unwrap();
+            .collect().unwrap();
 
         let mort_ticks = col_f64(&mort_by_tick, "tick");
         let totals = col_f64(&mort_by_tick, "total");
@@ -2984,62 +3021,13 @@ fn investigate_backstop_subsistence_labor() {
         let avg_sats = col_f64(&mort_by_tick, "avg_sat");
         let min_sats = col_f64(&mort_by_tick, "min_sat");
 
-        println!("\nMortality:");
+        println!("\nPopulation & Mortality:");
         println!("  {:>4} {:>6} {:>6} {:>6} {:>8} {:>8}",
             "tick", "pops", "deaths", "births", "avg_sat", "min_sat");
         for &t in &sample_ticks {
             if let Some(i) = mort_ticks.iter().position(|&x| x as usize == t) {
                 println!("  {:>4} {:>6.0} {:>6.0} {:>6.0} {:>8.3} {:>8.3}",
                     t, totals[i], deaths[i], births[i], avg_sats[i], min_sats[i]);
-            }
-        }
-    } else {
-        println!("  No mortality dataframe");
-    }
-
-    // --- Key diagnostic: bid vs ask margin ---
-    if let (Some(labor_bid), Some(labor_ask)) = (dfs.get("labor_bid"), dfs.get("labor_ask")) {
-        let bid_agg = labor_bid
-            .clone()
-            .lazy()
-            .group_by([col("tick")])
-            .agg([col("max_wage").mean().alias("avg_bid")])
-            .sort(["tick"], Default::default())
-            .collect()
-            .unwrap();
-        let ask_agg = labor_ask
-            .clone()
-            .lazy()
-            .group_by([col("tick")])
-            .agg([col("min_wage").mean().alias("avg_ask")])
-            .sort(["tick"], Default::default())
-            .collect()
-            .unwrap();
-
-        let bid_vals = col_f64(&bid_agg, "avg_bid");
-        let ask_vals = col_f64(&ask_agg, "avg_ask");
-        let n = bid_vals.len().min(ask_vals.len());
-
-        if n > 0 {
-            let margins: Vec<f64> = (0..n).map(|i| bid_vals[i] - ask_vals[i]).collect();
-            let positive = margins.iter().filter(|&&m| m > 0.0).count();
-            let negative = margins.iter().filter(|&&m| m <= 0.0).count();
-            let avg_margin = margins.iter().sum::<f64>() / n as f64;
-
-            println!("\nBid-Ask margin analysis:");
-            println!("  Positive margin (bid > ask, hiring possible): {positive}/{n} ticks");
-            println!("  Negative margin (bid <= ask, hiring blocked): {negative}/{n} ticks");
-            println!("  Average margin: {avg_margin:.4}");
-
-            // Show ticks where margin is negative
-            let bid_ticks = col_f64(&bid_agg, "tick");
-            let blocked: Vec<usize> = (0..n)
-                .filter(|&i| margins[i] <= 0.0)
-                .map(|i| bid_ticks[i] as usize)
-                .take(20)
-                .collect();
-            if !blocked.is_empty() {
-                println!("  First blocked ticks: {:?}", blocked);
             }
         }
     }

@@ -15,14 +15,10 @@ const FOOD_SURPLUS_CAP_RATIO: f64 = 1.25;
 const SUBSISTENCE_RESOURCE_QUALITY: ResourceQuality = ResourceQuality::Normal;
 
 
-fn derive_crowding_alpha(q_max: f64, carrying_capacity: usize) -> f64 {
-    (q_max - 1.0).max(0.0) / (carrying_capacity as f64 - 1.0).max(1.0)
-}
-
 fn subsistence_total_output(pop_count: usize, q_max: f64, carrying_capacity: usize) -> f64 {
-    let alpha = derive_crowding_alpha(q_max, carrying_capacity);
+    use sim_core::labor::subsistence::subsistence_output_per_worker;
     (1..=pop_count)
-        .map(|rank| q_max / (1.0 + alpha.max(0.0) * (rank as f64 - 1.0)))
+        .map(|rank| subsistence_output_per_worker(rank, q_max, carrying_capacity))
         .sum()
 }
 

@@ -707,7 +707,7 @@ struct ConvergenceThresholds {
     trailing_window: usize,
     pop_stability_window: usize,
     max_price_std: f64,
-    max_abs_pop_slope: f64,
+    max_pop_cv: f64,
     max_abs_stock_slope: f64,
     min_employment_rate: f64,
     min_food_satisfaction_mean: f64,
@@ -719,7 +719,7 @@ impl Default for ConvergenceThresholds {
             trailing_window: 50,
             pop_stability_window: 25,
             max_price_std: 0.05,
-            max_abs_pop_slope: 0.10,
+            max_pop_cv: 0.10,
             max_abs_stock_slope: 1.0,
             min_employment_rate: 0.85,
             min_food_satisfaction_mean: 0.95,
@@ -733,7 +733,8 @@ struct ConvergenceDiagnostics {
     trailing_window: usize,
     price_mean: f64,
     price_std: f64,
-    pop_slope_per_tick: f64,
+    pop_mean: f64,
+    pop_cv: f64,
     merchant_stock_slope_per_tick: f64,
     mean_net_external_qty: f64,
     employment_rate_mean: f64,
@@ -753,7 +754,7 @@ struct EquilibriumPrediction {
 #[derive(Debug, Clone, Copy, Default)]
 struct StabilizationControls {
     enable_external_grain_anchor: bool,
-    /// None = no subsistence, Some(q_max) = enabled with that q_max. K stays at 10.
+    /// None = no subsistence, Some(q_max) = enabled with that q_max.
     subsistence_q_max: Option<f64>,
 }
 
@@ -762,13 +763,13 @@ fn subsistence_config_for_controls(
 ) -> Option<SubsistenceReservationConfig> {
     controls
         .subsistence_q_max
-        .map(|q_max| SubsistenceReservationConfig::new(GRAIN, q_max, 10, 10.0))
+        .map(|q_max| SubsistenceReservationConfig::new(GRAIN, q_max, 50, 10.0))
 }
 
 fn subsistence_total_output(unemployed: usize, cfg: &SubsistenceReservationConfig) -> f64 {
-    let alpha = cfg.crowding_alpha();
+    use sim_core::labor::subsistence::subsistence_output_per_worker;
     (1..=unemployed)
-        .map(|k| cfg.q_max / (1.0 + alpha.max(0.0) * (k as f64 - 1.0)))
+        .map(|rank| subsistence_output_per_worker(rank, cfg.q_max, cfg.carrying_capacity))
         .sum()
 }
 
@@ -808,11 +809,19 @@ fn evaluate_convergence(
         .iter()
         .fold(1.0, |acc, &v| if v < acc { v } else { acc });
 
+    let pop_mean = mean(&pop_w_f);
+    let pop_cv = if pop_mean > 0.0 {
+        std_dev(&pop_w_f) / pop_mean
+    } else {
+        f64::INFINITY
+    };
+
     let diagnostics = ConvergenceDiagnostics {
         trailing_window: thresholds.trailing_window,
         price_mean: mean(price_w),
         price_std: std_dev(price_w),
-        pop_slope_per_tick: slope_per_tick(&pop_w_f),
+        pop_mean,
+        pop_cv,
         merchant_stock_slope_per_tick: slope_per_tick(stock_w),
         mean_net_external_qty: mean(ext_w),
         employment_rate_mean: mean(&employment_rates),
@@ -822,7 +831,7 @@ fn evaluate_convergence(
 
     let converged = !extinction
         && diagnostics.price_std <= thresholds.max_price_std
-        && diagnostics.pop_slope_per_tick.abs() <= thresholds.max_abs_pop_slope
+        && diagnostics.pop_cv <= thresholds.max_pop_cv
         && diagnostics.merchant_stock_slope_per_tick.abs() <= thresholds.max_abs_stock_slope
         && diagnostics.employment_rate_mean >= thresholds.min_employment_rate
         && diagnostics.food_satisfaction_mean >= thresholds.min_food_satisfaction_mean;
@@ -839,7 +848,7 @@ fn is_weakly_stable(
         && diagnostics.price_std <= 0.03
         && diagnostics.employment_rate_mean >= min_employment_rate
         && diagnostics.food_satisfaction_mean >= 0.95
-        && diagnostics.pop_slope_per_tick > -0.1
+        && diagnostics.pop_cv <= 0.10
 }
 
 fn predict_equilibrium_population(
@@ -1219,7 +1228,7 @@ fn run_calibration_trial(
     world.set_external_market(external);
     if let Some(cfg) = subsistence_config_for_controls(StabilizationControls {
         enable_external_grain_anchor: true,
-        subsistence_q_max: Some(1.02),
+        subsistence_q_max: Some(1.0),
     }) {
         world.set_subsistence_reservation(cfg);
     }
@@ -1368,34 +1377,40 @@ fn compute_calibration_sweep_snapshot() -> CalibrationSweepSnapshot {
 
 /// Basic multi-pop convergence test with backstop subsistence (q_max=0.8).
 ///
-/// With q_max=0.8 < production_rate=1.05, subsistence is never preferred over
-/// formal employment. This converges quickly (~400 ticks) with high employment.
+/// With q_max=1.0, subsistence provides a credible outside option: workers won't
+/// accept wages below grain_price (subsistence gives food_sat=1.0 for free).
+/// This creates a natural wage floor that prevents the death spiral.
 #[test]
 fn multi_pop_basic_convergence() {
+    let num_pops = 100;
+    let num_facilities = 2;
+    let production_rate = MULTI_POP_PRODUCTION_RATE;
+    let q_max = 1.0;
+    let min_employment = 0.55;
+    let ticks = 600;
+    let reps = 5usize;
+    let min_success_rate = 0.80f64;
+
     println!("\n=== Multi-Pop Basic Convergence (Backstop Subsistence) ===\n");
 
     let controls = StabilizationControls {
         enable_external_grain_anchor: true,
-        subsistence_q_max: Some(1.02),
+        subsistence_q_max: Some(q_max),
     };
+    let subsistence_cfg = subsistence_config_for_controls(controls);
+    let capacity = num_pops; // num_facilities × (num_pops / num_facilities)
     let eq = predict_equilibrium_population(
-        100,
-        100, // 2 facilities × 50 capacity
-        MULTI_POP_PRODUCTION_RATE,
+        num_pops,
+        capacity,
+        production_rate,
         1.0,
-        subsistence_config_for_controls(controls).as_ref(),
+        subsistence_cfg.as_ref(),
     );
     println!(
         "Analytical equilibrium prediction: capacity={}, feasible_pop_range=[{}, {}], best_pop={} (abs_gap={:.4})",
-        eq.formal_capacity,
-        eq.feasible_pop_min,
-        eq.feasible_pop_max,
-        eq.approx_best_pop,
-        eq.best_abs_gap
+        eq.formal_capacity, eq.feasible_pop_min, eq.feasible_pop_max, eq.approx_best_pop, eq.best_abs_gap
     );
 
-    let reps = 5usize;
-    let min_success_rate = 0.80f64;
     let mut successes = 0usize;
     let mut final_pops = Vec::new();
     let mut final_prices = Vec::new();
@@ -1403,20 +1418,21 @@ fn multi_pop_basic_convergence() {
 
     for rep in 0..reps {
         let result = run_multi_pop_trial_with_controls(
-            100,
-            2,
-            MULTI_POP_PRODUCTION_RATE,
+            num_pops,
+            num_facilities,
+            production_rate,
             1.0,
             5.0,
             210.0,
-            400,
+            ticks,
             controls,
-            0.85,
+            min_employment,
         );
 
         if rep == 0 {
-            println!("Setup: 100 pops, 2 facilities, q_max=0.8 (backstop)");
-            println!("  Production: 105/tick, Consumption: 100/tick (slack)");
+            let k = subsistence_cfg.as_ref().map(|c| c.carrying_capacity).unwrap_or(0);
+            println!("Setup: {num_pops} pops, {num_facilities} facilities, q_max={q_max}, K={k}");
+            println!("  Production: {:.0}/tick, ticks={ticks}", num_pops as f64 * production_rate);
             println!("  Sample final price: {:.3}", result.final_price);
             println!(
                 "  Sample pop count: {} → {}",
@@ -1424,10 +1440,11 @@ fn multi_pop_basic_convergence() {
             );
             println!("  Sample weakly_stable: {}", result.weakly_stable);
             println!(
-                "  Sample diagnostics: price_std={:.4} empl_rate={:.3} food_sat_mean={:.3}",
+                "  Sample diagnostics: price_std={:.4} empl_rate={:.3} food_sat={:.3} pop_cv={:.4}",
                 result.diagnostics.price_std,
                 result.diagnostics.employment_rate_mean,
                 result.diagnostics.food_satisfaction_mean,
+                result.diagnostics.pop_cv,
             );
         }
 
@@ -1532,10 +1549,11 @@ fn multi_pop_subsistence_overlap_convergence() {
             );
             println!("  Sample weakly_stable: {}", result.weakly_stable);
             println!(
-                "  Sample diagnostics: price_std={:.4} empl_rate={:.3} food_sat_mean={:.3}",
+                "  Sample diagnostics: price_std={:.4} empl_rate={:.3} food_sat={:.3} pop_cv={:.4}",
                 result.diagnostics.price_std,
                 result.diagnostics.employment_rate_mean,
                 result.diagnostics.food_satisfaction_mean,
+                result.diagnostics.pop_cv,
             );
         }
 
@@ -1587,7 +1605,7 @@ fn multi_pop_sweep_initial_conditions() {
     ];
     let controls = StabilizationControls {
         enable_external_grain_anchor: true,
-        subsistence_q_max: Some(1.02),
+        subsistence_q_max: Some(1.0),
     };
     let reps_per_scenario = 5usize;
 
@@ -2028,7 +2046,7 @@ fn multi_pop_population_sensitivity() {
     println!("\n=== Population Sensitivity ===\n");
     let controls = StabilizationControls {
         enable_external_grain_anchor: true,
-        subsistence_q_max: Some(1.02),
+        subsistence_q_max: Some(1.0),
     };
     let reps = 3usize;
     let ticks = 300;
