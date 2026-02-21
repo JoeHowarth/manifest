@@ -294,8 +294,8 @@ fn price_ema_stays_bounded() {
     let good_profiles = create_good_profiles();
     let needs = create_needs();
 
-    let min_price = 0.001;
-    let max_price = 10000.0;
+    let min_price = 0.01;
+    let max_price = 100.0;
 
     for tick in 0..50 {
         world.run_tick(&good_profiles, &needs, &Vec::<Recipe>::new());

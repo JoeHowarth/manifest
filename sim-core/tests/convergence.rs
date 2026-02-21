@@ -836,6 +836,7 @@ fn is_weakly_stable(diagnostics: &ConvergenceDiagnostics, extinction: bool) -> b
         && diagnostics.price_std <= 0.03
         && diagnostics.employment_rate_mean >= 0.85
         && diagnostics.food_satisfaction_mean >= 0.95
+        && diagnostics.pop_slope_per_tick > -0.1
 }
 
 fn predict_equilibrium_population(
@@ -1397,7 +1398,7 @@ fn multi_pop_basic_convergence() {
     );
 
     let reps = 5usize;
-    let min_success_rate = 0.60f64;
+    let min_success_rate = 0.80f64;
     let mut successes = 0usize;
     let mut final_pops = Vec::new();
     let mut final_prices = Vec::new();
