@@ -1028,16 +1028,21 @@ impl World {
                 }
                 MortalityOutcome::Grows => {
                     // Clone the pop to create a new one.
-                    // Child startup funds come from the parent so growth doesn't mint currency.
+                    // Parent keeps 60%, child gets 40% of both currency and goods.
                     if let Some(parent) = self.pops.get_mut(&pop_id) {
                         let mut child = parent.clone();
-                        // Reset child's stocks to modest starting amount.
-                        child.stocks.clear();
 
-                        // Split parent savings with the child.
-                        let child_currency = parent.currency * 0.5;
+                        let child_currency = parent.currency * 0.4;
                         parent.currency -= child_currency;
                         child.currency = child_currency;
+
+                        for (good, qty) in &mut child.stocks {
+                            let child_share = *qty * 0.4;
+                            if let Some(parent_qty) = parent.stocks.get_mut(good) {
+                                *parent_qty -= child_share;
+                            }
+                            *qty = child_share;
+                        }
 
                         new_pops.push((settlement_id, child));
                     }
@@ -1055,12 +1060,33 @@ impl World {
                 }
                 // Remove from facility employment
                 for facility in self.facilities.values_mut() {
-                    // Note: Current design has pops as single workers, not tracked per-facility
-                    // If pop was employed, reduce worker count
                     if pop.employed_at == Some(facility.id) {
                         for skill in &pop.skills {
                             if let Some(count) = facility.workers.get_mut(skill) {
                                 *count = count.saturating_sub(1);
+                            }
+                        }
+                    }
+                }
+                // Distribute deceased pop's estate (currency + goods) among
+                // up to 3 random surviving pops in the same settlement.
+                use rand::seq::SliceRandom;
+                let mut heirs: Vec<PopId> = self.pops.keys()
+                    .filter(|id| {
+                        self.pops.get(id).is_some_and(|p| p.home_settlement == pop.home_settlement)
+                    })
+                    .copied()
+                    .collect();
+                heirs.shuffle(&mut rng);
+                heirs.truncate(3);
+                let n = heirs.len();
+                if n > 0 {
+                    let share = 1.0 / n as f64;
+                    for heir_id in &heirs {
+                        if let Some(heir) = self.pops.get_mut(heir_id) {
+                            heir.currency += pop.currency * share;
+                            for (good, qty) in &pop.stocks {
+                                *heir.stocks.entry(*good).or_insert(0.0) += qty * share;
                             }
                         }
                     }
@@ -1078,7 +1104,11 @@ impl World {
                 new_pop.min_wage = child.min_wage;
                 new_pop.income_ema = child.income_ema;
                 new_pop.currency = child.currency;
+                new_pop.stocks = child.stocks;
                 new_pop.desired_consumption_ema = child.desired_consumption_ema;
+                // Inherit parent's need satisfaction so newborns aren't
+                // immediately killed by the mortality check next tick.
+                new_pop.need_satisfaction = child.need_satisfaction;
             }
         }
     }

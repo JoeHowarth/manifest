@@ -175,9 +175,9 @@ pub fn greedy_consume(
         match best {
             Some((good, _, price)) => {
                 let available = remaining_stocks.get(&good).copied().unwrap_or(0.0);
-                // Consume up to 1 unit, but respect budget and availability
+                // Consume up to 0.1 units, but respect budget and availability
                 let max_by_budget = remaining_budget / price;
-                let delta = available.min(1.0).min(max_by_budget);
+                let delta = available.min(0.1).min(max_by_budget);
 
                 if delta < 0.001 {
                     break;

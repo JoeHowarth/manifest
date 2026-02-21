@@ -427,8 +427,7 @@ fn invariant_closed_economy_tick_residual_near_zero() {
         Need {
             id: "food".to_string(),
             utility_curve: UtilityCurve::Subsistence {
-                // Keep sat pinned near 1.0 so mortality/growth RNG does not fire.
-                requirement: 0.1,
+                requirement: 1.0,
                 steepness: 5.0,
             },
         },

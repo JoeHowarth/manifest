@@ -3,6 +3,9 @@ mod common;
 use common::*;
 
 use polars::prelude::*;
+
+// Re-import common::mean to shadow polars::prelude::mean
+use common::mean;
 use sim_core::instrument::ScopedRecorder;
 use sim_core::production::{FacilityType, RecipeId};
 use sim_core::{AnchoredGoodConfig, ExternalMarketConfig, SettlementFriction, World};
@@ -2797,4 +2800,247 @@ fn investigate_longrun_equilibrium() {
     }
 
     println!("\n{}", "=".repeat(90));
+}
+
+/// Investigate labor market dynamics with backstop subsistence (q_max=1.02).
+///
+/// Hypothesis: With q_max=1.02 < production_rate=1.05, all pops should prefer
+/// formal employment over subsistence. Employment should be ~100% of capacity.
+/// If not, the bottleneck is in the bid adjustment margin (only 3%).
+#[test]
+#[ignore = "investigation: backstop subsistence labor dynamics"]
+fn investigate_backstop_subsistence_labor() {
+    use sim_core::SubsistenceReservationConfig;
+
+    let num_pops = 100usize;
+    let num_facilities = 2usize;
+    let production_rate = 1.05;
+    let ticks = 400usize;
+
+    let (mut world, settlement) = create_world(
+        num_pops,
+        num_facilities,
+        1.0,    // initial_price
+        5.0,    // initial_pop_stock
+        210.0,  // initial_merchant_stock
+    );
+
+    // Override: start unemployed with min_wage=0 (matching convergence tests)
+    for pop in world.pops.values_mut() {
+        pop.employed_at = None;
+        pop.min_wage = 0.0;
+    }
+    for facility in world.facilities.values_mut() {
+        facility.workers.clear();
+    }
+
+    // Configure anchor + subsistence
+    configure_anchor(&mut world, settlement, 0.10, 9000.0);
+    world.set_subsistence_reservation(SubsistenceReservationConfig::new(GRAIN, 1.02, 10, 10.0));
+
+    let recipes = vec![common::make_grain_recipe(production_rate)];
+    let good_profiles = common::make_grain_profile();
+    let needs = common::make_food_need(1.0);
+
+    let rec_name = format!("backstop_subsistence_q102_p{num_pops}");
+    let mut rec = ScopedRecorder::new("data/investigation", &rec_name);
+
+    for _ in 0..ticks {
+        world.run_tick(&good_profiles, &needs, &recipes);
+    }
+    let dfs = rec.get();
+
+    println!("\n=== Backstop Subsistence Labor Investigation ===");
+    println!("  q_max=1.02, production_rate={production_rate}, pops={num_pops}, capacity=100");
+    println!("  Margin: MVP - reservation = (1.05 - 1.02) * price = 3% of price\n");
+
+    // --- Labor bids: what are facilities offering? ---
+    let sample_ticks: Vec<usize> = (0..ticks).step_by(20).chain(std::iter::once(ticks - 1)).collect();
+
+    if let Some(labor_bid) = dfs.get("labor_bid") {
+        let bids_summary = labor_bid
+            .clone()
+            .lazy()
+            .group_by([col("tick")])
+            .agg([
+                col("max_wage").mean().alias("avg_bid"),
+                col("max_wage").min().alias("min_bid"),
+                col("max_wage").max().alias("max_bid"),
+                col("mvp").mean().alias("avg_mvp"),
+                col("adaptive_bid").mean().alias("avg_adaptive"),
+                col("bid_id").count().alias("n_bids"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        let bid_ticks = col_f64(&bids_summary, "tick");
+        let avg_bids = col_f64(&bids_summary, "avg_bid");
+        let avg_mvps = col_f64(&bids_summary, "avg_mvp");
+        let avg_adaptive = col_f64(&bids_summary, "avg_adaptive");
+        let n_bids = col_f64(&bids_summary, "n_bids");
+
+        println!("Labor bids (facility offers):");
+        println!("  {:>4} {:>8} {:>8} {:>8} {:>6}",
+            "tick", "avg_bid", "avg_mvp", "adaptive", "n_bids");
+        for &t in &sample_ticks {
+            if let Some(i) = bid_ticks.iter().position(|&x| x as usize == t) {
+                println!("  {:>4} {:>8.4} {:>8.4} {:>8.4} {:>6.0}",
+                    t, avg_bids[i], avg_mvps[i], avg_adaptive[i], n_bids[i]);
+            }
+        }
+    } else {
+        println!("  No labor_bid dataframe");
+    }
+
+    // --- Labor asks: what are pops demanding? ---
+    if let Some(labor_ask) = dfs.get("labor_ask") {
+        let asks_summary = labor_ask
+            .clone()
+            .lazy()
+            .group_by([col("tick")])
+            .agg([
+                col("min_wage").mean().alias("avg_ask"),
+                col("min_wage").min().alias("min_ask"),
+                col("min_wage").max().alias("max_ask"),
+                col("ask_id").count().alias("n_asks"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        let ask_ticks = col_f64(&asks_summary, "tick");
+        let avg_asks = col_f64(&asks_summary, "avg_ask");
+        let min_asks = col_f64(&asks_summary, "min_ask");
+        let max_asks = col_f64(&asks_summary, "max_ask");
+        let n_asks = col_f64(&asks_summary, "n_asks");
+
+        println!("\nLabor asks (pop reservations):");
+        println!("  {:>4} {:>8} {:>8} {:>8} {:>6}",
+            "tick", "avg_ask", "min_ask", "max_ask", "n_asks");
+        for &t in &sample_ticks {
+            if let Some(i) = ask_ticks.iter().position(|&x| x as usize == t) {
+                println!("  {:>4} {:>8.4} {:>8.4} {:>8.4} {:>6.0}",
+                    t, avg_asks[i], min_asks[i], max_asks[i], n_asks[i]);
+            }
+        }
+    } else {
+        println!("  No labor_ask dataframe");
+    }
+
+    // --- Assignments: who got hired? ---
+    if let Some(assignment) = dfs.get("assignment") {
+        let emp_by_tick = assignment
+            .clone()
+            .lazy()
+            .group_by([col("tick")])
+            .agg([
+                col("pop_id").count().alias("employed"),
+                col("wage").mean().alias("avg_wage"),
+                col("wage").min().alias("min_wage"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        let emp_ticks = col_f64(&emp_by_tick, "tick");
+        let emp_counts = col_f64(&emp_by_tick, "employed");
+        let avg_wages = col_f64(&emp_by_tick, "avg_wage");
+
+        println!("\nAssignments:");
+        println!("  {:>4} {:>8} {:>8}",
+            "tick", "employed", "avg_wage");
+        for &t in &sample_ticks {
+            if let Some(i) = emp_ticks.iter().position(|&x| x as usize == t) {
+                println!("  {:>4} {:>8.0} {:>8.4}",
+                    t, emp_counts[i], avg_wages[i]);
+            }
+        }
+    } else {
+        println!("  No assignment dataframe");
+    }
+
+    // --- Mortality: what's happening to population? ---
+    if let Some(mortality) = dfs.get("mortality") {
+        let mort_by_tick = mortality
+            .clone()
+            .lazy()
+            .group_by([col("tick")])
+            .agg([
+                col("pop_id").count().alias("total"),
+                col("outcome").filter(col("outcome").eq(lit("dies"))).count().alias("deaths"),
+                col("outcome").filter(col("outcome").eq(lit("grows"))).count().alias("births"),
+                col("food_satisfaction").mean().alias("avg_sat"),
+                col("food_satisfaction").min().alias("min_sat"),
+            ])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        let mort_ticks = col_f64(&mort_by_tick, "tick");
+        let totals = col_f64(&mort_by_tick, "total");
+        let deaths = col_f64(&mort_by_tick, "deaths");
+        let births = col_f64(&mort_by_tick, "births");
+        let avg_sats = col_f64(&mort_by_tick, "avg_sat");
+        let min_sats = col_f64(&mort_by_tick, "min_sat");
+
+        println!("\nMortality:");
+        println!("  {:>4} {:>6} {:>6} {:>6} {:>8} {:>8}",
+            "tick", "pops", "deaths", "births", "avg_sat", "min_sat");
+        for &t in &sample_ticks {
+            if let Some(i) = mort_ticks.iter().position(|&x| x as usize == t) {
+                println!("  {:>4} {:>6.0} {:>6.0} {:>6.0} {:>8.3} {:>8.3}",
+                    t, totals[i], deaths[i], births[i], avg_sats[i], min_sats[i]);
+            }
+        }
+    } else {
+        println!("  No mortality dataframe");
+    }
+
+    // --- Key diagnostic: bid vs ask margin ---
+    if let (Some(labor_bid), Some(labor_ask)) = (dfs.get("labor_bid"), dfs.get("labor_ask")) {
+        let bid_agg = labor_bid
+            .clone()
+            .lazy()
+            .group_by([col("tick")])
+            .agg([col("max_wage").mean().alias("avg_bid")])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+        let ask_agg = labor_ask
+            .clone()
+            .lazy()
+            .group_by([col("tick")])
+            .agg([col("min_wage").mean().alias("avg_ask")])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+
+        let bid_vals = col_f64(&bid_agg, "avg_bid");
+        let ask_vals = col_f64(&ask_agg, "avg_ask");
+        let n = bid_vals.len().min(ask_vals.len());
+
+        if n > 0 {
+            let margins: Vec<f64> = (0..n).map(|i| bid_vals[i] - ask_vals[i]).collect();
+            let positive = margins.iter().filter(|&&m| m > 0.0).count();
+            let negative = margins.iter().filter(|&&m| m <= 0.0).count();
+            let avg_margin = margins.iter().sum::<f64>() / n as f64;
+
+            println!("\nBid-Ask margin analysis:");
+            println!("  Positive margin (bid > ask, hiring possible): {positive}/{n} ticks");
+            println!("  Negative margin (bid <= ask, hiring blocked): {negative}/{n} ticks");
+            println!("  Average margin: {avg_margin:.4}");
+
+            // Show ticks where margin is negative
+            let bid_ticks = col_f64(&bid_agg, "tick");
+            let blocked: Vec<usize> = (0..n)
+                .filter(|&i| margins[i] <= 0.0)
+                .map(|i| bid_ticks[i] as usize)
+                .take(20)
+                .collect();
+            if !blocked.is_empty() {
+                println!("  First blocked ticks: {:?}", blocked);
+            }
+        }
+    }
 }
