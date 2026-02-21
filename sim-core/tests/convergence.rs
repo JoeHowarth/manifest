@@ -11,22 +11,17 @@
 //! The equilibrium price depends on the ratio of these targets.
 //! When merchant target < pop target, merchant is more eager to sell → lower prices.
 
-use std::collections::HashMap;
+#[allow(dead_code)]
+mod common;
+use common::*;
 
 use serde::{Deserialize, Serialize};
 use sim_core::{
     AnchoredGoodConfig, ExternalMarketConfig, SettlementFriction, SubsistenceReservationConfig,
     World,
-    labor::SkillId,
-    needs::{Need, UtilityCurve},
-    production::{FacilityType, Recipe, RecipeId},
-    types::{GoodId, GoodProfile, NeedContribution},
+    production::{FacilityType, RecipeId},
+    types::GoodId,
 };
-
-// === CONSTANTS ===
-
-const GRAIN: GoodId = 1;
-const LABORER: SkillId = SkillId(1);
 const MULTI_POP_PRODUCTION_RATE: f64 = 1.05;
 const CALIBRATION_PRODUCTION_RATE: f64 = 1.0;
 
@@ -128,37 +123,6 @@ fn create_world(params: SystemParams, conditions: InitialConditions) -> World {
     world
 }
 
-fn make_recipe(production_rate: f64) -> Recipe {
-    Recipe::new(RecipeId::new(1), "Grain Farming", vec![FacilityType::Farm])
-        .with_capacity_cost(1)
-        .with_worker(LABORER, 1)
-        .with_output(GRAIN, production_rate)
-}
-
-fn make_good_profiles() -> Vec<GoodProfile> {
-    vec![GoodProfile {
-        good: GRAIN,
-        contributions: vec![NeedContribution {
-            need_id: "food".to_string(),
-            efficiency: 1.0,
-        }],
-    }]
-}
-
-fn make_needs(consumption_requirement: f64) -> HashMap<String, Need> {
-    let mut needs = HashMap::new();
-    needs.insert(
-        "food".to_string(),
-        Need {
-            id: "food".to_string(),
-            utility_curve: UtilityCurve::Subsistence {
-                requirement: consumption_requirement,
-                steepness: 5.0,
-            },
-        },
-    );
-    needs
-}
 
 // === CONVERGENCE RESULT ===
 
@@ -177,14 +141,6 @@ struct ConvergenceResult {
     failure_reason: Option<String>,
 }
 
-#[allow(dead_code)]
-fn variance(data: &[f64]) -> f64 {
-    if data.is_empty() {
-        return 0.0;
-    }
-    let mean = data.iter().sum::<f64>() / data.len() as f64;
-    data.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / data.len() as f64
-}
 
 // === TESTS ===
 
@@ -334,7 +290,7 @@ fn trace_clearing_mechanism() {
     };
 
     let world = create_world(params, conditions);
-    let good_profiles = make_good_profiles();
+    let good_profiles = make_grain_profile();
     let settlement = *world.settlements.keys().next().unwrap();
 
     // Get references to agents
@@ -524,7 +480,7 @@ fn trace_death_spiral_orders() {
     };
 
     let world = create_world(params, conditions);
-    let good_profiles = make_good_profiles();
+    let good_profiles = make_grain_profile();
     let settlement = *world.settlements.keys().next().unwrap();
 
     let pop = world.pops.values().next().unwrap();
@@ -830,35 +786,11 @@ fn subsistence_total_output(unemployed: usize, cfg: &SubsistenceReservationConfi
         .sum()
 }
 
-fn mean(values: &[f64]) -> f64 {
-    if values.is_empty() {
-        0.0
-    } else {
-        values.iter().sum::<f64>() / values.len() as f64
-    }
-}
-
-fn std_dev(values: &[f64]) -> f64 {
-    if values.is_empty() {
-        return 0.0;
-    }
-    let m = mean(values);
-    (values.iter().map(|v| (v - m).powi(2)).sum::<f64>() / values.len() as f64).sqrt()
-}
-
 fn slope_per_tick(values: &[f64]) -> f64 {
     if values.len() <= 1 {
         0.0
     } else {
         (values[values.len() - 1] - values[0]) / (values.len() as f64 - 1.0)
-    }
-}
-
-fn trailing<T>(values: &[T], n: usize) -> &[T] {
-    if values.len() <= n {
-        values
-    } else {
-        &values[values.len() - n..]
     }
 }
 
@@ -1054,9 +986,9 @@ fn run_multi_pop_trial_with_controls(
         initial_merchant_stock,
     );
 
-    let recipes = vec![make_recipe(production_rate)];
-    let good_profiles = make_good_profiles();
-    let needs = make_needs(1.0); // consumption requirement = 1.0
+    let recipes = vec![make_grain_recipe(production_rate)];
+    let good_profiles = make_grain_profile();
+    let needs = make_food_need(1.0); // consumption requirement = 1.0
 
     let settlement = *world.settlements.keys().next().unwrap();
     enable_stabilizers_for_settlement(&mut world, settlement, controls);
@@ -1299,9 +1231,9 @@ fn run_calibration_trial(
         world.set_subsistence_reservation(cfg);
     }
 
-    let recipes = vec![make_recipe(production_rate)];
-    let good_profiles = make_good_profiles();
-    let needs = make_needs(1.0);
+    let recipes = vec![make_grain_recipe(production_rate)];
+    let good_profiles = make_grain_profile();
+    let needs = make_food_need(1.0);
 
     let mut price_history = Vec::with_capacity(ticks);
     let mut employment_rate_history = Vec::with_capacity(ticks);

@@ -1,3 +1,7 @@
+#[allow(dead_code)]
+mod common;
+use common::*;
+
 use std::collections::HashMap;
 
 use sim_core::tick::PRICE_EMA_ALPHA;
@@ -5,8 +9,6 @@ use sim_core::{
     AnchoredGoodConfig, ExternalMarketConfig, GoodId, GoodProfile, Need, OutsideFlowTotals, Pop,
     PopId, Price, SettlementFriction, SettlementId, run_settlement_tick,
 };
-
-const GRAIN: GoodId = 1;
 
 fn make_anchor_config(
     settlement: SettlementId,

@@ -3,6 +3,10 @@
 //! These tests verify that certain properties hold regardless of the specific
 //! scenario configuration. They catch bugs in the economic logic.
 
+#[allow(dead_code)]
+mod common;
+use common::*;
+
 use std::collections::HashMap;
 
 use sim_core::{
@@ -12,9 +16,6 @@ use sim_core::{
 };
 
 // === TEST FIXTURES ===
-
-/// Standard goods for testing
-const GRAIN: GoodId = 1;
 const BREAD: GoodId = 2;
 
 /// Create a basic world with settlements and pops for testing

@@ -1,32 +1,19 @@
+#[allow(dead_code)]
+mod common;
+use common::*;
+
 use std::collections::HashMap;
 
 use sim_core::{
-    GoodId, GoodProfile, Need, NeedContribution, Recipe, ResourceQuality,
+    GoodProfile, Need, NeedContribution, Recipe, ResourceQuality,
     SubsistenceReservationConfig, UtilityCurve, World,
 };
-
-const GRAIN: GoodId = 1;
 const SUBSISTENCE_Q_MAX: f64 = 1.5;
 const SUBSISTENCE_CARRYING_CAPACITY: usize = 40;
 const FOOD_REQUIREMENT: f64 = 1.0;
 const FOOD_SURPLUS_CAP_RATIO: f64 = 1.25;
 const SUBSISTENCE_RESOURCE_QUALITY: ResourceQuality = ResourceQuality::Normal;
 
-fn mean(xs: &[f64]) -> f64 {
-    if xs.is_empty() {
-        return 0.0;
-    }
-    xs.iter().sum::<f64>() / xs.len() as f64
-}
-
-fn stddev(xs: &[f64]) -> f64 {
-    if xs.is_empty() {
-        return 0.0;
-    }
-    let mu = mean(xs);
-    let var = xs.iter().map(|x| (x - mu).powi(2)).sum::<f64>() / xs.len() as f64;
-    var.sqrt()
-}
 
 fn derive_crowding_alpha(q_max: f64, carrying_capacity: usize) -> f64 {
     (q_max - 1.0).max(0.0) / (carrying_capacity as f64 - 1.0).max(1.0)
@@ -147,7 +134,7 @@ fn population_converges_to_constant_carrying_capacity_across_initial_sweep() {
             let history = run_subsistence_only_trial(start, TICKS);
             let tail = &history[TICKS - TAIL..];
             let tail_mean = mean(tail);
-            let tail_std = stddev(tail);
+            let tail_std = std_dev(tail);
 
             // Strongly discourage non-convergent runs.
             assert!(

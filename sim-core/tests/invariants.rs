@@ -1,16 +1,16 @@
+#[allow(dead_code)]
+mod common;
+use common::*;
+
 use std::collections::HashMap;
 
 use sim_core::{
     AnchoredGoodConfig, ExternalMarketConfig, GoodId, GoodProfile, Need, NeedContribution,
     OutsideFlowTotals, Pop, PopId, Price, Recipe, SettlementFriction, SettlementId,
     SubsistenceReservationConfig, UtilityCurve, World,
-    labor::SkillId,
     production::{FacilityType, RecipeId},
     run_settlement_tick,
 };
-
-const GRAIN: GoodId = 1;
-const LABORER: SkillId = SkillId(1);
 
 fn total_currency(world: &World) -> f64 {
     let pop_currency: f64 = world.pops.values().map(|p| p.currency).sum();

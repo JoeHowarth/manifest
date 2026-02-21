@@ -1,14 +1,16 @@
+#[allow(dead_code)]
+mod common;
+use common::*;
+
 use std::collections::HashMap;
 
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use sim_core::{
-    AnchoredGoodConfig, ExternalMarketConfig, GoodId, GoodProfile, MerchantAgent, MerchantId, Need,
-    NeedContribution, Pop, PopId, Price, SettlementFriction, SettlementId, UtilityCurve,
+    AnchoredGoodConfig, ExternalMarketConfig, GoodId, MerchantAgent, MerchantId,
+    Pop, PopId, Price, SettlementFriction, SettlementId,
     run_settlement_tick,
 };
-
-const GRAIN: GoodId = 1;
 const TICKS: usize = 120;
 const TAIL_WINDOW: usize = 40;
 const SEEDS: [u64; 5] = [3, 7, 19, 42, 2026];
@@ -39,53 +41,13 @@ struct ConvergenceBaselineSnapshot {
     aggregate: AggregateMetrics,
 }
 
-fn make_good_profiles() -> Vec<GoodProfile> {
-    vec![GoodProfile {
-        good: GRAIN,
-        contributions: vec![NeedContribution {
-            need_id: "food".to_string(),
-            efficiency: 1.0,
-        }],
-    }]
-}
-
-fn make_needs() -> HashMap<String, Need> {
-    let mut needs = HashMap::new();
-    needs.insert(
-        "food".to_string(),
-        Need {
-            id: "food".to_string(),
-            utility_curve: UtilityCurve::Subsistence {
-                requirement: 1.0,
-                steepness: 5.0,
-            },
-        },
-    );
-    needs
-}
-
-fn mean(xs: &[f64]) -> f64 {
-    if xs.is_empty() {
-        return 0.0;
-    }
-    xs.iter().sum::<f64>() / xs.len() as f64
-}
-
-fn stddev(xs: &[f64]) -> f64 {
-    if xs.is_empty() {
-        return 0.0;
-    }
-    let mu = mean(xs);
-    let var = xs.iter().map(|x| (x - mu).powi(2)).sum::<f64>() / xs.len() as f64;
-    var.sqrt()
-}
 
 fn run_trial(seed: u64) -> TrialMetrics {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
 
     let settlement = SettlementId::new(0);
-    let good_profiles = make_good_profiles();
-    let needs = make_needs();
+    let good_profiles = make_grain_profile();
+    let needs = make_food_need(1.0);
 
     let mut price_ema: HashMap<GoodId, Price> = HashMap::new();
     price_ema.insert(GRAIN, rng.random_range(0.8..1.2));
@@ -186,7 +148,7 @@ fn run_trial(seed: u64) -> TrialMetrics {
         seed,
         final_price: *price_history.last().unwrap_or(&0.0),
         tail_price_mean: mean(tail_prices),
-        tail_price_std: stddev(tail_prices),
+        tail_price_std: std_dev(tail_prices),
         tail_trade_value_mean: mean(tail_trade_value),
         final_pop_currency_total,
         final_merchant_stock,

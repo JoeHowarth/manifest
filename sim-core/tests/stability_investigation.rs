@@ -1,15 +1,11 @@
-use std::collections::HashMap;
+#[allow(dead_code)]
+mod common;
+use common::*;
 
 use polars::prelude::*;
 use sim_core::instrument::ScopedRecorder;
-use sim_core::labor::SkillId;
-use sim_core::needs::{Need, UtilityCurve};
-use sim_core::production::{FacilityType, Recipe, RecipeId};
-use sim_core::types::{GoodId, GoodProfile, NeedContribution};
+use sim_core::production::{FacilityType, RecipeId};
 use sim_core::{AnchoredGoodConfig, ExternalMarketConfig, SettlementFriction, World};
-
-const GRAIN: GoodId = 1;
-const LABORER: SkillId = SkillId(1);
 
 #[derive(Debug, Clone, Copy)]
 struct Scenario {
@@ -18,37 +14,6 @@ struct Scenario {
     transport_bps: f64,
 }
 
-fn make_recipe(production_rate: f64) -> Recipe {
-    Recipe::new(RecipeId::new(1), "Grain Farming", vec![FacilityType::Farm])
-        .with_capacity_cost(1)
-        .with_worker(LABORER, 1)
-        .with_output(GRAIN, production_rate)
-}
-
-fn make_good_profiles() -> Vec<GoodProfile> {
-    vec![GoodProfile {
-        good: GRAIN,
-        contributions: vec![NeedContribution {
-            need_id: "food".to_string(),
-            efficiency: 1.0,
-        }],
-    }]
-}
-
-fn make_needs() -> HashMap<String, Need> {
-    let mut needs = HashMap::new();
-    needs.insert(
-        "food".to_string(),
-        Need {
-            id: "food".to_string(),
-            utility_curve: UtilityCurve::Subsistence {
-                requirement: 1.0,
-                steepness: 5.0,
-            },
-        },
-    );
-    needs
-}
 
 fn create_world(
     num_pops: usize,
@@ -129,21 +94,6 @@ fn configure_anchor(
     world.set_external_market(external);
 }
 
-fn mean(v: &[f64]) -> f64 {
-    if v.is_empty() {
-        0.0
-    } else {
-        v.iter().sum::<f64>() / v.len() as f64
-    }
-}
-
-fn tail(values: &[f64], n: usize) -> &[f64] {
-    if values.len() <= n {
-        values
-    } else {
-        &values[values.len() - n..]
-    }
-}
 
 fn col_f64(df: &DataFrame, name: &str) -> Vec<f64> {
     let series = df.column(name).unwrap();
@@ -188,9 +138,9 @@ fn investigate_anchor_regimes_with_dataframes() {
         },
     ];
 
-    let recipes = vec![make_recipe(1.0)];
-    let good_profiles = make_good_profiles();
-    let needs = make_needs();
+    let recipes = vec![make_grain_recipe(1.0)];
+    let good_profiles = make_grain_profile();
+    let needs = make_food_need(1.0);
 
     println!("\n=== Stability Investigation (Instrumented DataFrames) ===");
     println!(
@@ -229,7 +179,7 @@ fn investigate_anchor_regimes_with_dataframes() {
             .collect()
             .unwrap();
         let price_series = col_f64(&prices_by_tick, "price");
-        let tail_price = mean(tail(&price_series, 40));
+        let tail_price = mean(trailing(&price_series, 40));
 
         let emp_by_tick = assignment
             .clone()
@@ -244,7 +194,7 @@ fn investigate_anchor_regimes_with_dataframes() {
             .collect()
             .unwrap();
         let emp_series = col_f64(&emp_by_tick, "emp_rate");
-        let tail_emp = mean(tail(&emp_series, 40));
+        let tail_emp = mean(trailing(&emp_series, 40));
 
         let traded_ticks = fill
             .clone()
@@ -491,7 +441,7 @@ fn investigate_anchor_regimes_with_dataframes() {
                 .collect()
                 .unwrap();
             let fulfill = col_f64(&by_tick, "fulfill");
-            mean(tail(&fulfill, 40))
+            mean(trailing(&fulfill, 40))
         } else {
             0.0
         };
@@ -571,7 +521,7 @@ fn investigate_anchor_regimes_with_dataframes() {
                 .collect()
                 .unwrap();
             let ratios = col_f64(&merged, "wage_price_ratio");
-            mean(tail(&ratios, 40))
+            mean(trailing(&ratios, 40))
         };
 
         println!(
@@ -661,9 +611,9 @@ fn investigate_population_trap() {
     world.set_external_market(external);
     world.set_subsistence_reservation(SubsistenceReservationConfig::new(GRAIN, 1.5, 10, 10.0));
 
-    let recipes = vec![make_recipe(production_rate)];
-    let good_profiles = make_good_profiles();
-    let needs = make_needs();
+    let recipes = vec![make_grain_recipe(production_rate)];
+    let good_profiles = make_grain_profile();
+    let needs = make_food_need(1.0);
 
     let mut rec = ScopedRecorder::new("data/investigation", "population_trap");
     for _ in 0..ticks {
@@ -1247,9 +1197,9 @@ fn investigate_feedback_loops() {
     world.set_external_market(external);
     world.set_subsistence_reservation(SubsistenceReservationConfig::new(GRAIN, 1.5, 10, 10.0));
 
-    let recipes = vec![make_recipe(production_rate)];
-    let good_profiles = make_good_profiles();
-    let needs = make_needs();
+    let recipes = vec![make_grain_recipe(production_rate)];
+    let good_profiles = make_grain_profile();
+    let needs = make_food_need(1.0);
 
     let mut rec = ScopedRecorder::new("data/investigation", "feedback_loops");
     for _ in 0..ticks {
@@ -1842,9 +1792,9 @@ fn investigate_monopsony_vs_competition() {
     let num_pops = 60;
     let ticks = 300;
 
-    let recipes = vec![make_recipe(production_rate)];
-    let good_profiles = make_good_profiles();
-    let needs = make_needs();
+    let recipes = vec![make_grain_recipe(production_rate)];
+    let good_profiles = make_grain_profile();
+    let needs = make_food_need(1.0);
 
     println!("\n{}", "=".repeat(80));
     println!("=== MONOPSONY VS COMPETITION INVESTIGATION ===");
@@ -1963,20 +1913,20 @@ fn investigate_monopsony_vs_competition() {
         // Wage / price ratio
         if let Some(labor_df) = dfs.get("labor_clearing") {
             let wages = col_f64(labor_df, "clearing_wage");
-            let tail_wages = tail(&wages, 40);
+            let tail_wages = trailing(&wages, 40);
             let avg_wage = mean(tail_wages);
             println!("  Tail avg wage: {:.4}", avg_wage);
         }
 
         if let Some(market_df) = dfs.get("market_clearing") {
             let prices = col_f64(market_df, "clearing_price");
-            let tail_prices = tail(&prices, 40);
+            let tail_prices = trailing(&prices, 40);
             let avg_price = mean(tail_prices);
             println!("  Tail avg price: {:.4}", avg_price);
 
             if let Some(labor_df) = dfs.get("labor_clearing") {
                 let wages = col_f64(labor_df, "clearing_wage");
-                let tail_wages = tail(&wages, 40);
+                let tail_wages = trailing(&wages, 40);
                 let avg_wage = mean(tail_wages);
                 let ratio = if avg_price > 0.0 { avg_wage / avg_price } else { 0.0 };
                 println!("  Tail wage/price: {:.4} (MVP ceiling = {production_rate})", ratio);
@@ -2112,9 +2062,9 @@ fn run_convergence_investigation(production_rate: f64) {
     world.set_external_market(external);
     world.set_subsistence_reservation(SubsistenceReservationConfig::new(GRAIN, 1.5, num_pops / 2, 10.0));
 
-    let recipes = vec![make_recipe(production_rate)];
-    let good_profiles = make_good_profiles();
-    let needs = make_needs();
+    let recipes = vec![make_grain_recipe(production_rate)];
+    let good_profiles = make_grain_profile();
+    let needs = make_food_need(1.0);
 
     let rec_name = format!("convergence_pr{:.0}", production_rate * 100.0);
     let mut rec = ScopedRecorder::new("data/investigation", &rec_name);
@@ -2559,13 +2509,6 @@ fn run_convergence_investigation(production_rate: f64) {
     println!("{}", "=".repeat(80));
 }
 
-fn std_dev(v: &[f64]) -> f64 {
-    if v.len() < 2 { return 0.0; }
-    let m = mean(v);
-    let variance = v.iter().map(|x| (x - m).powi(2)).sum::<f64>() / (v.len() - 1) as f64;
-    variance.sqrt()
-}
-
 /// Linear regression slope (least squares) of y on x = 0,1,2,...
 fn lin_slope(y: &[f64]) -> f64 {
     let n = y.len() as f64;
@@ -2650,9 +2593,9 @@ fn investigate_longrun_equilibrium() {
     world.set_external_market(external);
     world.set_subsistence_reservation(SubsistenceReservationConfig::new(GRAIN, 1.5, num_pops / 2, 10.0));
 
-    let recipes = vec![make_recipe(production_rate)];
-    let good_profiles = make_good_profiles();
-    let needs = make_needs();
+    let recipes = vec![make_grain_recipe(production_rate)];
+    let good_profiles = make_grain_profile();
+    let needs = make_food_need(1.0);
 
     let mut rec = ScopedRecorder::new("data/investigation", "longrun_2x");
     for _ in 0..ticks {
