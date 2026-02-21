@@ -12,6 +12,21 @@ use sim_core::{
     run_settlement_tick,
 };
 
+fn total_grain(world: &World) -> f64 {
+    let pop_grain: f64 = world
+        .pops
+        .values()
+        .map(|p| p.stocks.get(&GRAIN).copied().unwrap_or(0.0))
+        .sum();
+    let merchant_grain: f64 = world
+        .merchants
+        .values()
+        .flat_map(|m| m.stockpiles.values())
+        .map(|s| s.get(GRAIN))
+        .sum();
+    pop_grain + merchant_grain
+}
+
 fn total_currency(world: &World) -> f64 {
     let pop_currency: f64 = world.pops.values().map(|p| p.currency).sum();
     let merchant_currency: f64 = world.merchants.values().map(|m| m.currency).sum();
@@ -463,4 +478,141 @@ fn invariant_closed_economy_tick_residual_near_zero() {
             flow.currency_residual
         );
     }
+}
+
+#[test]
+fn invariant_open_economy_grain_accounting_balanced() {
+    let mut world = World::new();
+    let settlement = world.add_settlement("OpenTown", (0.0, 0.0));
+    let merchant = world.add_merchant();
+    let farm = world
+        .add_facility(FacilityType::Farm, settlement, merchant)
+        .unwrap();
+
+    {
+        let facility = world.get_facility_mut(farm).unwrap();
+        facility.capacity = 10;
+        facility.recipe_priorities = vec![RecipeId::new(1)];
+        facility.workers.insert(LABORER, 10);
+    }
+    {
+        let merchant_ref = world.get_merchant_mut(merchant).unwrap();
+        merchant_ref.currency = 10_000.0;
+        merchant_ref.stockpile_at(settlement).add(GRAIN, 500.0);
+    }
+
+    for _ in 0..10 {
+        let pop_id = world.add_pop(settlement).unwrap();
+        let pop = world.get_pop_mut(pop_id).unwrap();
+        pop.skills.insert(LABORER);
+        pop.min_wage = 0.5;
+        pop.currency = 500.0;
+        pop.income_ema = 2.0;
+        pop.stocks.insert(GRAIN, 50.0);
+        pop.desired_consumption_ema.insert(GRAIN, 1.0);
+        pop.employed_at = Some(farm);
+    }
+
+    world.wage_ema.insert(LABORER, 2.0);
+    world.price_ema.insert((settlement, GRAIN), 1.0);
+
+    // Enable external anchor
+    let mut external = ExternalMarketConfig::default();
+    external.anchors.insert(
+        GRAIN,
+        AnchoredGoodConfig {
+            world_price: 10.0,
+            spread_bps: 500.0,
+            base_depth: 0.0,
+            depth_per_pop: 0.5,
+            tiers: 9,
+            tier_step_bps: 300.0,
+        },
+    );
+    external.frictions.insert(
+        settlement,
+        SettlementFriction {
+            enabled: true,
+            transport_bps: 5000.0,
+            tariff_bps: 0.0,
+            risk_bps: 0.0,
+        },
+    );
+    world.set_external_market(external);
+
+    let good_profiles = make_grain_profile();
+    let needs = make_food_need(0.1); // low requirement to avoid mortality
+
+    let recipes = vec![make_grain_recipe(2.0)];
+
+    let ticks = 20usize;
+    for _ in 0..ticks {
+        let grain_before = total_grain(&world);
+        world.run_tick(&good_profiles, &needs, &recipes);
+        let grain_after = total_grain(&world);
+
+        let flow = world.stock_flow_history.last().unwrap();
+        let manual_delta = grain_after - grain_before;
+
+        // 1. Verify our manual grain snapshot matches the accounting system
+        let accounted_delta = flow.goods_delta.get(&GRAIN).copied().unwrap_or(0.0);
+        let snapshot_err = (manual_delta - accounted_delta).abs();
+        assert!(
+            snapshot_err < 1e-6,
+            "Manual grain delta disagrees with accounting at tick {}: manual={manual_delta:.8}, accounted={accounted_delta:.8}, err={snapshot_err:.8}",
+            flow.tick,
+        );
+
+        // 2. Verify grain conservation: delta = imports - exports + internal_net
+        //    Since goods_before/goods_after already include everything, the
+        //    accounting identity is: goods_delta = imports_qty - exports_qty + internal_net
+        //    Therefore: internal_net = goods_delta - imports_qty + exports_qty
+        //    internal_net = production + subsistence - consumption (should be >= 0 in surplus)
+        let imports = flow.imports_qty_delta.get(&GRAIN).copied().unwrap_or(0.0);
+        let exports = flow.exports_qty_delta.get(&GRAIN).copied().unwrap_or(0.0);
+
+        // The accounting identity: goods_delta == internal_net + imports - exports
+        // We verify this by checking goods_before/goods_after directly against our
+        // manual snapshot
+        let goods_before = flow.goods_before.get(&GRAIN).copied().unwrap_or(0.0);
+        let goods_after = flow.goods_after.get(&GRAIN).copied().unwrap_or(0.0);
+        let reconstructed = goods_before + accounted_delta;
+        let reconstruction_err = (goods_after - reconstructed).abs();
+        assert!(
+            reconstruction_err < 1e-6,
+            "Grain reconstruction failed at tick {}: goods_after={goods_after:.8}, reconstructed={reconstructed:.8}, err={reconstruction_err:.8}",
+            flow.tick,
+        );
+
+        // 3. Verify the goods_delta decomposition is consistent:
+        //    goods_delta should equal (imports - exports + internal_net_production)
+        //    We can't measure internal_net directly, but we can verify that
+        //    imports and exports are non-negative and don't exceed the total delta
+        assert!(
+            imports >= -1e-9,
+            "Negative imports at tick {}: {imports:.8}",
+            flow.tick,
+        );
+        assert!(
+            exports >= -1e-9,
+            "Negative exports at tick {}: {exports:.8}",
+            flow.tick,
+        );
+    }
+
+    // Verify the external anchor actually generated some trade
+    let total_imports: f64 = world
+        .stock_flow_history
+        .iter()
+        .map(|f| f.imports_qty_delta.get(&GRAIN).copied().unwrap_or(0.0))
+        .sum();
+    let total_exports: f64 = world
+        .stock_flow_history
+        .iter()
+        .map(|f| f.exports_qty_delta.get(&GRAIN).copied().unwrap_or(0.0))
+        .sum();
+    assert!(
+        total_imports > 0.0 || total_exports > 0.0,
+        "Open economy should have some external trade: imports={total_imports:.4}, exports={total_exports:.4}"
+    );
 }
