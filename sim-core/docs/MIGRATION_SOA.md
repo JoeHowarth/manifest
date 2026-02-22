@@ -2,41 +2,49 @@
 
 ## Goal
 
-Replace the current `HashMap<PopId, Pop>` / `HashMap<FacilityId, Facility>` architecture with per-settlement storage that is cache-friendly, eliminates the extract/reinsert pattern, and enables future per-settlement parallelism via rayon.
+Move all settlement-local state (pops, facilities, prices, wages, bid states) into a `SettlementState` struct. This eliminates the extract/reinsert ceremony, makes settlement-scoped iteration O(local) instead of O(global), and enables future per-settlement parallelism.
 
 ## Current Pain Points
 
 1. **Extract/reinsert ceremony** (world.rs:188-255) — pops and merchants are removed from global HashMaps, processed, then reinserted every settlement every tick
-2. **HashMap-per-entity for hot fields** — `Pop.stocks`, `Pop.desired_consumption_ema`, `Pop.need_satisfaction` are all `HashMap<GoodId, f64>` with ~10 entries each. Hash overhead dominates actual data
-3. **Linear scans for settlement membership** — `facilities_at_settlement()` scans all facilities; `merchants_at_settlement()` does the same then deduplicates
-4. **Global labor phase fights the borrow checker** — iterates facilities, looks up merchants, looks up price_ema, all from `&mut self`
+2. **Linear scans for settlement membership** — `facilities_at_settlement()` scans all facilities; `merchants_at_settlement()` does the same then deduplicates
+3. **Global labor phase is wrong** — `clear_labor_markets` has zero settlement filtering; a London pop can be assigned to a Paris facility. Only works by accident with one settlement.
+4. **Borrow checker friction** — `run_labor_phase` iterates facilities while looking up merchants, price_ema, and wage_ema from `&mut self`
 
-## Target Architecture
+## Target Data Structures
 
-### SettlementState — owns all settlement-local entities
+### SettlementState
 
 ```rust
+use slotmap::{SlotMap, new_key_type};
+
+new_key_type! { pub struct PopKey; }
+new_key_type! { pub struct FacilityKey; }
+
 pub struct SettlementState {
+    pub id: SettlementId,
     pub info: Settlement,               // name, position, resource_slots
 
-    // Pops (dense Vec, not HashMap)
-    pub pops: Vec<Pop>,
-    // Index: PopId → position in pops vec (for O(1) lookup by ID)
-    pub pop_index: HashMap<PopId, usize>,
+    // Pops (dense generational arena)
+    pub pops: SlotMap<PopKey, Pop>,
 
-    // Facilities (dense Vec)
-    pub facilities: Vec<Facility>,
-    pub facility_index: HashMap<FacilityId, usize>,
+    // Facilities (dense generational arena)
+    pub facilities: SlotMap<FacilityKey, Facility>,
 
-    // Per-settlement market state
+    // Per-settlement market & labor state
     pub price_ema: HashMap<GoodId, Price>,
-    pub facility_bid_states: HashMap<FacilityId, FacilityBidState>,
-    pub subsistence_queue: Vec<PopId>,
+    pub wage_ema: HashMap<SkillId, Price>,
+    pub facility_bid_states: HashMap<FacilityKey, FacilityBidState>,
+    pub subsistence_queue: Vec<PopKey>,
     pub depth_multipliers: HashMap<GoodId, f64>,
 }
 ```
 
-### World — global state + settlement container
+**Why SlotMap:** Already a dependency. Dense storage with O(1) insert/remove/lookup. Generational keys prevent use-after-free bugs during mortality removals. No manual index bookkeeping.
+
+**Key type migration:** `PopId(u32)` / `FacilityId(u32)` become `PopKey` / `FacilityKey` internally. Keep the old `PopId` as a stable external ID (field on Pop, used for instrumentation/tracing). A lightweight `HashMap<PopId, (SettlementId, PopKey)>` reverse index on World handles the rare global-lookup case (tests, cross-settlement references in accounting).
+
+### World
 
 ```rust
 pub struct World {
@@ -44,11 +52,8 @@ pub struct World {
     pub settlement_states: HashMap<SettlementId, SettlementState>,
     pub routes: Vec<Route>,
 
-    // Merchants remain global (they span settlements)
+    // Merchants remain global (span settlements via stockpiles)
     pub merchants: HashMap<MerchantId, MerchantAgent>,
-
-    // Global labor state
-    pub wage_ema: HashMap<SkillId, Price>,
 
     // Global config (immutable during tick)
     pub external_market: Option<ExternalMarketConfig>,
@@ -63,339 +68,184 @@ pub struct World {
     next_settlement_id: u32,
     next_agent_id: u32,
     next_facility_id: u32,
+
+    // Reverse indices (for global lookups from tests/accounting)
+    pop_to_settlement: HashMap<PopKey, SettlementId>,
+    facility_to_settlement: HashMap<FacilityKey, SettlementId>,
 }
 ```
 
-### What moves into SettlementState vs. stays global
+### What moves vs. stays
 
-| Data | Current location | New location | Reason |
-|------|-----------------|-------------|--------|
-| Pops | `World.pops` | `SettlementState.pops` | Pops are settlement-bound, never move |
-| Facilities | `World.facilities` | `SettlementState.facilities` | Facilities are settlement-bound |
+| Data | Current | New | Why |
+|------|---------|-----|-----|
+| Pops | `World.pops` | `SettlementState.pops` | Settlement-bound, never move |
+| Facilities | `World.facilities` | `SettlementState.facilities` | Settlement-bound |
 | `price_ema` | `World.price_ema[(sid,gid)]` | `SettlementState.price_ema[gid]` | Only accessed per-settlement |
-| `facility_bid_states` | `World.facility_bid_states` | `SettlementState.facility_bid_states` | Keyed by facility, which is per-settlement |
+| `wage_ema` | `World.wage_ema[skill]` | `SettlementState.wage_ema[skill]` | Labor is per-settlement (pops can't commute) |
+| `facility_bid_states` | `World.facility_bid_states` | `SettlementState.facility_bid_states` | Per-facility → per-settlement |
 | `subsistence_queues` | `World.subsistence_queues[sid]` | `SettlementState.subsistence_queue` | Already per-settlement |
-| `trade_depth_multipliers` | `World.trade_depth_multipliers[(sid,gid)]` | `SettlementState.depth_multipliers[gid]` | Already per-settlement-keyed |
-| Merchants | `World.merchants` | **Stays global** | Merchants span settlements via stockpiles |
-| `wage_ema` | `World.wage_ema` | **Stays global** | Labor market clears globally across settlements |
+| `depth_multipliers` | `World.trade_depth_multipliers[(sid,gid)]` | `SettlementState.depth_multipliers[gid]` | Already per-settlement-keyed |
+| Merchants | `World.merchants` | **Stays global** | Span settlements via stockpiles |
 | External market config | `World.external_market` | **Stays global** | Immutable config |
 | Routes | `World.routes` | **Stays global** | Cross-settlement by definition |
 
-## Migration Steps
+## New Tick Structure
 
-### Phase 1: Introduce SettlementState, move pops and facilities
+Current `run_tick` has three scopes: global labor, global production, per-settlement market tick, global mortality. After migration, everything is per-settlement:
 
-This is the structural change. Every subsequent phase is a refactor within this structure.
-
-**1a. Create `SettlementState` struct**
-
-Define `SettlementState` with `pops: Vec<Pop>`, `facilities: Vec<Facility>`, plus the index HashMaps. Keep all the same entity types — no field changes to `Pop` or `Facility` yet.
-
-**1b. Change `World` to hold `HashMap<SettlementId, SettlementState>`**
-
-Remove `World.pops`, `World.facilities`, `World.settlements`. Replace with `World.settlement_states`. Move `price_ema`, `facility_bid_states`, `subsistence_queues`, `trade_depth_multipliers` into `SettlementState`.
-
-**1c. Update World builder methods**
-
-- `add_settlement()` creates a `SettlementState`
-- `add_pop(settlement_id)` pushes to `settlement_states[settlement_id].pops` and updates `pop_index`
-- `add_facility(type, settlement_id, owner_id)` pushes to `settlement_states[settlement_id].facilities` and updates `facility_index`
-- `get_pop(id)` needs a way to find which settlement a pop is in. Options:
-  - Keep a global `HashMap<PopId, SettlementId>` reverse index (cheap, O(1))
-  - Or require callers to provide the settlement (cleaner API, pushes settlement-awareness up)
-- `get_facility(id)` — same choice
-
-Decision: **keep a lightweight global reverse index** for the builder/accessor methods, since tests and setup code use `get_pop(id)` extensively without knowing the settlement. The hot tick path won't use it.
-
-```rust
-// In World:
-pop_to_settlement: HashMap<PopId, SettlementId>,
-facility_to_settlement: HashMap<FacilityId, SettlementId>,
 ```
+run_tick:
+    tick += 1
+    capture pre-tick snapshot (accounting)
 
-**1d. Update accessor methods**
+    let mut merchants = std::mem::take(&mut self.merchants);
 
-- `pops_at_settlement(sid)` → `&self.settlement_states[&sid].pops` (direct slice, no filter)
-- `facilities_at_settlement(sid)` → `&self.settlement_states[&sid].facilities` (direct slice, no filter)
-- `merchants_at_settlement(sid)` → derive from `settlement_states[&sid].facilities` owners (local scan, not global)
-- `get_pop(id)` → use reverse index to find settlement, then index into vec
-- `get_pop_mut(id)` → same
+    for (sid, state) in &mut self.settlement_states {
+        // Extract merchant refs for this settlement
+        let merchant_ids = state.local_merchant_ids();
+        let mut merchant_refs: Vec<&mut MerchantAgent> = merchant_ids
+            .iter()
+            .filter_map(|id| merchants.get_mut(id))
+            .collect();
 
-**1e. Compile and fix all call sites**
-
-This will touch most of the codebase. The compiler will guide us — every `self.pops.get(&id)` becomes a lookup through the reverse index or a direct settlement-scoped access.
-
-### Phase 2: Rewrite run_settlement_tick to take &mut SettlementState
-
-**2a. Change the signature**
-
-Current:
-```rust
-pub fn run_settlement_tick(
-    tick: u64,
-    settlement: SettlementId,
-    pops: &mut [&mut Pop],
-    merchants: &mut [&mut MerchantAgent],
-    good_profiles: &[GoodProfile],
-    needs: &HashMap<String, Need>,
-    price_ema: &mut HashMap<GoodId, Price>,
-    external_market: Option<&ExternalMarketConfig>,
-    outside_flow_totals: Option<&mut OutsideFlowTotals>,
-    subsistence_config: Option<&SubsistenceReservationConfig>,
-    depth_multipliers: &HashMap<GoodId, f64>,
-    subsistence_queue: Option<&[PopId]>,
-) -> market::MultiMarketResult
-```
-
-New:
-```rust
-pub fn run_settlement_tick(
-    tick: u64,
-    state: &mut SettlementState,
-    merchants: &mut [&mut MerchantAgent],   // still extracted (merchants are global)
-    good_profiles: &[GoodProfile],
-    needs: &HashMap<String, Need>,
-    external_market: Option<&ExternalMarketConfig>,
-    outside_flow_totals: Option<&mut OutsideFlowTotals>,
-    subsistence_config: Option<&SubsistenceReservationConfig>,
-) -> market::MultiMarketResult
-```
-
-`price_ema`, `depth_multipliers`, `subsistence_queue`, and `settlement_id` are all now inside `state`.
-
-**2b. Eliminate the extract/reinsert loop in `World::run_tick`**
-
-Current (world.rs:164-261): extracts pops, extracts merchants, calls run_settlement_tick, reinserts everything.
-
-New:
-```rust
-for (sid, state) in &mut self.settlement_states {
-    // Extract only merchants (they're global, need mutable refs)
-    let merchant_ids: Vec<MerchantId> = state.facilities.iter()
-        .map(|f| f.owner)
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect();
-    let mut extracted_merchants: Vec<(MerchantId, MerchantAgent)> = merchant_ids
-        .iter()
-        .filter_map(|id| self.merchants.remove(id).map(|m| (*id, m)))
-        .collect();
-    let mut merchant_refs: Vec<&mut MerchantAgent> =
-        extracted_merchants.iter_mut().map(|(_, m)| m).collect();
-
-    run_settlement_tick(
-        self.tick,
-        state,
-        &mut merchant_refs,
-        good_profiles,
-        needs,
-        self.external_market.as_ref(),
-        Some(&mut self.outside_flow_totals),
-        self.subsistence_reservation.as_ref(),
-    );
-
-    // Only merchants need reinsertion
-    for (id, merchant) in extracted_merchants {
-        self.merchants.insert(id, merchant);
+        // All phases run per-settlement:
+        state.run_labor(&mut merchant_refs, recipes, &config);
+        state.run_production(&mut merchant_refs, recipes);
+        state.run_subsistence(&config);
+        state.run_consumption(good_profiles, needs);
+        state.run_market_clearing(&mut merchant_refs, good_profiles, &config, &mut outside_flow_totals);
+        state.run_price_ema_update(good_profiles, &config);
+        state.run_mortality(tick, mortality_grace_ticks, &mut next_agent_id);
     }
-}
+
+    self.merchants = merchants;
+
+    capture post-tick snapshot (accounting)
 ```
 
-This can't iterate `&mut self.settlement_states` while also accessing `self.merchants` due to borrow splitting. Solutions:
-- Extract all merchants once before the loop, reinsert after
-- Or split World into separate fields and pass them independently
+**Borrow splitting:** `std::mem::take` moves merchants out of World for the duration of the loop. This lets us iterate `&mut self.settlement_states` while mutating merchants independently. One take/restore per tick, not per settlement.
 
-Preferred: **split the borrow** by restructuring the loop to take `&mut self.settlement_states` and `&mut self.merchants` as separate borrows. This can be done by destructuring or by extracting merchants into a local before the loop:
+**Merchant ref safety:** Within a single settlement tick, we only touch each merchant's stockpile at *this* settlement. Two settlements could share a merchant, but since this is sequential, there's no conflict. Under future rayon parallelism, the stockpile split (see below) resolves this.
 
-```rust
-let mut merchants = std::mem::take(&mut self.merchants);
-for (sid, state) in &mut self.settlement_states {
-    // ... use &mut merchants directly, no extract/reinsert per settlement
-    let merchant_ids = state.merchant_ids(); // derive from facility owners
-    let mut merchant_refs: Vec<&mut MerchantAgent> = merchant_ids
-        .iter()
-        .filter_map(|id| merchants.get_mut(id))
-        .collect();
-    // ...
-}
-self.merchants = merchants;
-```
+## Rewrite Checklist
 
-This is one extract/reinsert for ALL merchants, not per-settlement. And it enables future parallelism since each settlement only touches its own merchants' stockpiles.
+This is one atomic change — every item must be done together because removing `World.pops` breaks all downstream code.
 
-### Phase 3: Refactor the labor phase
+### 1. Define SettlementState, update World struct
 
-The labor phase is the trickiest because it currently runs globally. It reads facilities from all settlements, generates bids, clears a unified labor market, then applies assignments back to pops across settlements.
+- Create `SettlementState` with SlotMaps, price_ema, wage_ema, facility_bid_states, subsistence_queue, depth_multipliers
+- Replace `World.pops`, `World.facilities`, `World.settlements`, `World.price_ema`, `World.wage_ema`, `World.facility_bid_states`, `World.subsistence_queues`, `World.trade_depth_multipliers` with `World.settlement_states`
+- Add reverse index maps
 
-**Key constraint**: `wage_ema` is global. Labor clearing uses it to prioritize skill markets. Assignments flow across all settlements.
+### 2. Update World builder/accessor methods
 
-**3a. Keep labor as a global phase, but read from SettlementStates**
+- `add_settlement()` → creates `SettlementState`
+- `add_pop(sid)` → `settlement_states[sid].pops.insert(...)`, updates reverse index
+- `add_facility(type, sid, owner)` → `settlement_states[sid].facilities.insert(...)`, updates reverse index
+- `get_pop(key)` → reverse index lookup → `state.pops[key]`
+- `get_pop_mut(key)` → same, mutable
+- `pops_at_settlement(sid)` → `&settlement_states[sid].pops` (direct, no scan)
+- `facilities_at_settlement(sid)` → `&settlement_states[sid].facilities` (direct)
+- `merchants_at_settlement(sid)` → derive from local facilities' owners
 
-Don't try to parallelize labor yet. Instead:
-- Iterate `self.settlement_states` to collect facility bids (replacing the current `self.facilities.values()` loop)
-- Iterate `self.settlement_states` to collect pop asks
-- Clear globally (same as today)
-- Apply assignments by looking up pops in their settlement's storage
+### 3. Rewrite run_labor_phase → per-settlement
 
-```rust
-// Bid generation: iterate facilities per settlement
-for (sid, state) in &self.settlement_states {
-    for facility in &state.facilities {
-        // generate bids using state.price_ema, self.merchants, self.wage_ema
-    }
-}
+Current: global `run_labor_phase(&mut self)` iterates all facilities, all pops, clears one global labor market.
 
-// Ask generation: iterate pops per settlement
-for (sid, state) in &self.settlement_states {
-    for pop in &state.pops {
-        // generate asks
-    }
-}
+New: `SettlementState::run_labor(...)` or free function taking `&mut SettlementState`.
 
-// Clearing: unchanged (global)
-let result = clear_labor_markets(...);
+Per settlement:
+- Generate bids from `state.facilities` using `state.price_ema`, `state.wage_ema`
+- Generate asks from `state.pops`
+- `clear_labor_markets(...)` with this settlement's bids/asks/wage_ema
+- `update_wage_emas(&mut state.wage_ema, ...)`
+- Apply assignments to `state.pops` and `state.facilities` (all local, no reverse index needed)
+- Update `state.facility_bid_states`
+- Update `state.subsistence_queue`
 
-// Apply assignments: use reverse index or settlement-aware lookup
-for assignment in &result.assignments {
-    let pop_id = PopId::new(assignment.worker_id);
-    let sid = self.pop_to_settlement[&pop_id];
-    let state = self.settlement_states.get_mut(&sid).unwrap();
-    let pop = &mut state.pops[state.pop_index[&pop_id]];
-    pop.employed_at = Some(assignment.facility_id);
-    // ...
-}
-```
+The `filled_workers: HashSet` in `clear_labor_markets` still works but is now purely local — no cross-settlement double-hire possible since pops only appear in their own settlement's ask list.
 
-**3b. Update subsistence queue management**
+### 4. Rewrite run_production_phase → per-settlement
 
-`update_subsistence_queues()` currently iterates `self.settlements` and `self.pops`. Change to iterate `self.settlement_states`, accessing `state.pops` and `state.subsistence_queue` directly.
+Current: global `run_production_phase(&mut self)` iterates `self.facilities.keys()`, looks up `self.settlements` for quality, looks up `self.merchants` for stockpiles.
 
-### Phase 4: Refactor mortality
+New: runs within per-settlement loop.
 
-Mortality is currently global but all operations are same-settlement. Restructure to process per-settlement:
+Per settlement:
+- Iterate `state.facilities`
+- Quality multiplier from `state.info.get_facility_slot()`
+- Merchant stockpile from `merchant_refs` (already extracted)
+- `allocate_recipes(...)` and `execute_production(...)`
+- Update merchant `production_ema`
 
-```rust
-for (sid, state) in &mut self.settlement_states {
-    let outcomes: Vec<(usize, MortalityOutcome)> = state.pops
-        .iter().enumerate()
-        .map(|(i, pop)| {
-            let food_sat = pop.need_satisfaction.get("food").copied().unwrap_or(0.0);
-            (i, check_mortality(&mut rng, food_sat))
-        })
-        .collect();
+### 5. Rewrite run_settlement_tick → methods on SettlementState
 
-    // Process deaths: remove from pops vec, update facility workers, distribute estate
-    // All within this settlement's state — no cross-settlement access needed
+Current signature has 12 parameters. Most become fields of `SettlementState`.
 
-    // Process growth: push new pops to state.pops
-}
-```
+The current `run_settlement_tick` in tick.rs covers: subsistence, consumption, order generation, market clearing, fill application, price EMA update. These become methods (or stay as one method) on `SettlementState`, taking only:
+- `tick: u64`
+- `merchants: &mut [&mut MerchantAgent]`
+- `good_profiles`, `needs` (global config refs)
+- `external_market` config ref
+- `&mut OutsideFlowTotals` (global accumulator)
+- `subsistence_config` ref
 
-This becomes embarrassingly parallel once we handle the global `next_agent_id` counter (pre-allocate ID ranges per settlement before the loop).
+`price_ema`, `depth_multipliers`, `subsistence_queue`, `settlement_id` are all accessed via `&mut self`.
 
-**Compaction note**: Removing pops from the middle of a Vec requires either:
-- `swap_remove` (O(1) but changes indices — need to update `pop_index`)
-- Mark-and-compact at end of mortality phase (batch the removals)
-- Use a `Vec<Option<Pop>>` with free list (avoids compaction but wastes cache space)
+### 6. Rewrite run_mortality_phase → per-settlement
 
-Recommendation: **swap_remove + update pop_index**. Deaths are rare relative to population size, so the index updates are cheap.
+Current: global, iterates `self.pops`, removes dead, adds children, distributes estate.
 
-### Phase 5: Replace Pop's inner HashMaps with fixed-size arrays
+New: runs within per-settlement loop.
 
-This is the SoA payoff for the innermost hot loop (consumption, order generation).
+Per settlement:
+- Iterate `state.pops`, compute outcomes
+- Deaths: `state.pops.remove(key)`, update `state.facilities` workers, distribute estate to other pops in `state.pops` (all local)
+- Growth: `state.pops.insert(child)`, update reverse index
+- ID allocation: pass `&mut next_agent_id` into the per-settlement mortality call, or pre-allocate ID ranges
 
-**5a. Define MAX_GOODS**
+SlotMap handles removal cleanly — no swap_remove or compaction needed.
 
-```rust
-pub const MAX_GOODS: usize = 16; // generous ceiling, currently ~10
-```
+### 7. Update accounting (capture_world_flow_snapshot)
 
-**5b. Replace HashMap fields on Pop**
+Current: iterates `world.pops.values()` and `world.merchants.values()`.
 
-```rust
-pub struct Pop {
-    pub id: PopId,
-    pub home_settlement: SettlementId,
-    pub currency: f64,
-    pub income_ema: f64,
-    pub employed_at: Option<FacilityId>,
-    pub skills: SmallVec<[SkillId; 4]>,  // or fixed array
-    pub min_wage: Price,
+New: iterates `world.settlement_states.values().flat_map(|s| s.pops.values())` for pop currency/stocks. Merchant iteration is unchanged.
 
-    // Fixed-size arrays indexed by GoodId
-    pub stocks: [f64; MAX_GOODS],
-    pub desired_consumption_ema: [f64; MAX_GOODS],
-    pub need_satisfaction: [f64; MAX_NEEDS],  // or keep HashMap if needs are dynamic
-}
-```
+### 8. Update instrumentation
 
-**5c. Update consumption, order generation, and market fill application**
+Tracing calls use `pop.id.0`, `facility_id.0`, `settlement_id.0` as integers. Keep `PopId` as a field on `Pop` so instrument target columns stay the same. No parquet schema changes needed.
 
-These are mostly mechanical: replace `.get(&good).copied().unwrap_or(0.0)` with `[good as usize]`.
+### 9. Delete legacy code
 
-**5d. Same treatment for Stockpile, Facility.workers**
+- Remove `run_market_tick` (deprecated wrapper in tick.rs:601-630)
+- Remove the extract/reinsert loop from `World::run_tick`
+- Remove `Settlement.pop_ids: Vec<PopId>` (pops now live in SettlementState's SlotMap)
 
-```rust
-// Stockpile
-pub struct Stockpile {
-    pub goods: [f64; MAX_GOODS],
-}
+### 10. Fix tests
 
-// Facility workers
-pub struct Facility {
-    pub workers: [u32; MAX_SKILLS],
-    // ...
-}
-```
+Tests use `world.add_pop(london)`, `world.get_pop(id)`, `world.get_pop_mut(id)`. These keep working via the updated builder/accessor methods. Convergence baselines may shift slightly because per-settlement labor changes wage dynamics (no shared wage signal across settlements). Update baselines after verifying behavior is economically reasonable.
 
-### Phase 6 (future): Rayon parallelism
+## Future Work (not part of this migration)
 
-With SettlementState owning all its data and merchants extracted once before the loop, the per-settlement tick becomes:
+### Rayon parallelism
 
-```rust
-let mut merchants = std::mem::take(&mut self.merchants);
-self.settlement_states.par_iter_mut().for_each(|(sid, state)| {
-    // Each settlement gets its own merchant refs
-    // Need to handle shared merchant access — see note below
-});
-self.merchants = merchants;
-```
+With `SettlementState` owning all local data and merchants extracted via `mem::take`, the loop becomes `par_iter_mut`. One remaining problem: if merchant M owns facilities in settlements A and B, both need `&mut MerchantAgent` simultaneously.
 
-**Merchant contention**: If merchant M owns facilities in settlements A and B, both settlements need `&mut MerchantAgent` simultaneously. Solutions:
-- Per-settlement merchant stockpile extraction (extract `HashMap<SettlementId, Stockpile>` into per-settlement owned data, merge back after)
-- `Mutex<MerchantAgent>` (simple but adds lock overhead)
-- Split merchant state: `MerchantSettlementState` (stockpile, production_ema for this settlement) lives in SettlementState, `MerchantGlobalState` (currency, facility_ids) stays in World
+Solutions:
+- Split merchant state: `MerchantSettlementState` (stockpile, production_ema) lives in `SettlementState`; `MerchantGlobalState` (currency, facility_ids) stays in World. Settlement tick only touches local stockpile.
+- Or `Mutex<MerchantAgent>` (simple but adds lock overhead)
+- Or extract per-settlement stockpile slices before the parallel loop, merge after
 
-This is a phase 6 concern and doesn't need to be solved during the initial migration.
+### `outside_flow_totals` under parallelism
 
-## Migration Order & Testing Strategy
+Currently passed as `&mut OutsideFlowTotals` into each settlement tick. Under rayon: either per-settlement accumulation + merge, or `Mutex`.
 
-Each phase should be a separate PR that keeps all tests passing:
+### Cross-settlement wage diffusion
 
-1. **Phase 1+2** together (structural change + tick rewrite) — this is the big bang, unavoidable since the data structure change touches everything. Run full test suite including convergence tests to verify economic behavior is unchanged.
+Per-settlement labor means settlements don't share wage information. If desired, merchants operating in multiple settlements could carry wage signals as a post-tick diffusion step. This should be an intentional feature, not an accident of flat data structures.
 
-2. **Phase 3** (labor refactor) — should produce identical labor clearing results. Validate with instrumented tests comparing assignment counts and wages.
+### Fixed-size arrays for Pop fields
 
-3. **Phase 4** (mortality refactor) — validate population trajectories match baseline.
-
-4. **Phase 5** (fixed-size arrays) — purely mechanical, behavior identical. Good candidate for property-based testing (old vs new produce same results).
-
-5. **Phase 6** (rayon) — add `rayon` parallelism, verify determinism with fixed seeds (may need to accept non-deterministic ordering for mortality within a settlement).
-
-## Risk: Merchant State During Parallel Settlement Ticks
-
-The one architectural decision that needs to be made before starting is how merchant state is partitioned. The cleanest long-term answer is:
-
-```rust
-// In SettlementState:
-pub merchant_stockpiles: HashMap<MerchantId, Stockpile>,
-pub merchant_production_ema: HashMap<MerchantId, HashMap<GoodId, f64>>,
-
-// In World (global):
-pub merchant_currency: HashMap<MerchantId, f64>,
-pub merchant_facility_ids: HashMap<MerchantId, HashSet<FacilityId>>,
-```
-
-This splits merchant state along the settlement boundary. Per-settlement tick only touches the local stockpile. Wage payments deducting from `merchant_currency` happen in the labor phase (global, sequential). This avoids all contention in the parallel settlement phase.
-
-Making this split in phase 1 (even before rayon) simplifies the whole migration because the merchant extract/reinsert problem goes away entirely.
+Replace `HashMap<GoodId, f64>` on Pop (stocks, desired_consumption_ema) with `[f64; MAX_GOODS]`. Purely a cache-locality optimization, independent of the structural migration. Adds a hard `MAX_GOODS` ceiling. Defer until profiling shows it matters.
