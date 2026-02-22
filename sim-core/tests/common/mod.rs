@@ -81,11 +81,7 @@ pub fn trend_slope(values: &[f64]) -> f64 {
         num += x * (y - y_mean);
         den += x * x;
     }
-    if den.abs() < 1e-15 {
-        0.0
-    } else {
-        num / den
-    }
+    if den.abs() < 1e-15 { 0.0 } else { num / den }
 }
 
 /// Summary statistics for a trailing window of a time series.
@@ -128,21 +124,31 @@ pub fn compute_tail_stats(values: &[f64], tail_window: usize) -> TailStats {
 pub fn col_f64(df: &polars::prelude::DataFrame, name: &str) -> Vec<f64> {
     let series = df.column(name).unwrap();
     match series.dtype() {
-        polars::datatypes::DataType::Float64 => {
-            series.f64().unwrap().into_no_null_iter().collect()
-        }
-        polars::datatypes::DataType::UInt64 => {
-            series.u64().unwrap().into_no_null_iter().map(|v| v as f64).collect()
-        }
-        polars::datatypes::DataType::UInt32 => {
-            series.u32().unwrap().into_no_null_iter().map(|v| v as f64).collect()
-        }
-        polars::datatypes::DataType::Int32 => {
-            series.i32().unwrap().into_no_null_iter().map(|v| v as f64).collect()
-        }
-        polars::datatypes::DataType::Int64 => {
-            series.i64().unwrap().into_no_null_iter().map(|v| v as f64).collect()
-        }
+        polars::datatypes::DataType::Float64 => series.f64().unwrap().into_no_null_iter().collect(),
+        polars::datatypes::DataType::UInt64 => series
+            .u64()
+            .unwrap()
+            .into_no_null_iter()
+            .map(|v| v as f64)
+            .collect(),
+        polars::datatypes::DataType::UInt32 => series
+            .u32()
+            .unwrap()
+            .into_no_null_iter()
+            .map(|v| v as f64)
+            .collect(),
+        polars::datatypes::DataType::Int32 => series
+            .i32()
+            .unwrap()
+            .into_no_null_iter()
+            .map(|v| v as f64)
+            .collect(),
+        polars::datatypes::DataType::Int64 => series
+            .i64()
+            .unwrap()
+            .into_no_null_iter()
+            .map(|v| v as f64)
+            .collect(),
         dt => panic!("col_f64: unsupported dtype {dt:?} for column {name}"),
     }
 }

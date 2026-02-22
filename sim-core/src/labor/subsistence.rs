@@ -20,8 +20,20 @@ pub struct SubsistenceReservationConfig {
 }
 
 impl SubsistenceReservationConfig {
-    pub fn new(grain_good: GoodId, q_max: f64, carrying_capacity: usize, default_grain_price: Price, risk_premium: f64) -> Self {
-        Self { grain_good, q_max, carrying_capacity, default_grain_price, risk_premium }
+    pub fn new(
+        grain_good: GoodId,
+        q_max: f64,
+        carrying_capacity: usize,
+        default_grain_price: Price,
+        risk_premium: f64,
+    ) -> Self {
+        Self {
+            grain_good,
+            q_max,
+            carrying_capacity,
+            default_grain_price,
+            risk_premium,
+        }
     }
 }
 
@@ -140,14 +152,20 @@ pub fn build_subsistence_reservation_ladder(
     let mut ladder = HashMap::with_capacity(total);
 
     // Unemployed: ranked reservation from queue-ordered subsistence yields + risk premium
-    let yields = ordered_subsistence_yields(subsistence_queue, unemployed_ids, cfg.q_max, cfg.carrying_capacity);
+    let yields = ordered_subsistence_yields(
+        subsistence_queue,
+        unemployed_ids,
+        cfg.q_max,
+        cfg.carrying_capacity,
+    );
     for (pop_id, qty) in &yields {
         ladder.insert(*pop_id, qty * grain_price_ref * (1.0 + cfg.risk_premium));
     }
 
     // Employed: marginal reservation = q(U+1) where U = number of unemployed (no premium)
     let marginal_rank = yields.len() + 1;
-    let marginal_qty = subsistence_output_per_worker(marginal_rank, cfg.q_max, cfg.carrying_capacity);
+    let marginal_qty =
+        subsistence_output_per_worker(marginal_rank, cfg.q_max, cfg.carrying_capacity);
     let marginal_reservation = marginal_qty * grain_price_ref;
     for &pop_id in employed_ids {
         ladder.insert(pop_id, marginal_reservation);
@@ -185,7 +203,10 @@ mod tests {
 
         // Rank 2K should be zero
         let at_2k = subsistence_output_per_worker(2 * k, q_max, k);
-        assert!((at_2k).abs() < 1e-9, "rank 2K should produce 0, got {at_2k}");
+        assert!(
+            (at_2k).abs() < 1e-9,
+            "rank 2K should produce 0, got {at_2k}"
+        );
 
         // Rank > 2K should be zero
         let beyond = subsistence_output_per_worker(2 * k + 5, q_max, k);
@@ -195,7 +216,11 @@ mod tests {
         for rank in (k + 1)..(2 * k) {
             let a = subsistence_output_per_worker(rank, q_max, k);
             let b = subsistence_output_per_worker(rank + 1, q_max, k);
-            assert!(a > b, "output should decrease: rank {rank} ({a}) > rank {} ({b})", rank + 1);
+            assert!(
+                a > b,
+                "output should decrease: rank {rank} ({a}) > rank {} ({b})",
+                rank + 1
+            );
         }
     }
 
@@ -206,13 +231,17 @@ mod tests {
         let unemployed: Vec<PopId> = (1..=15).map(PopId::new).collect();
         let employed = vec![];
         let queue: Vec<PopId> = unemployed.clone();
-        let ladder = build_subsistence_reservation_ladder(&employed, &unemployed, 10.0, &cfg, &queue);
+        let ladder =
+            build_subsistence_reservation_ladder(&employed, &unemployed, 10.0, &cfg, &queue);
 
         for i in 1..15u32 {
             assert!(
                 ladder[&PopId::new(i)] >= ladder[&PopId::new(i + 1)],
                 "ladder should be monotone: pop {} ({}) >= pop {} ({})",
-                i, ladder[&PopId::new(i)], i + 1, ladder[&PopId::new(i + 1)]
+                i,
+                ladder[&PopId::new(i)],
+                i + 1,
+                ladder[&PopId::new(i + 1)]
             );
         }
     }
@@ -223,7 +252,8 @@ mod tests {
         let unemployed = vec![PopId::new(1), PopId::new(2), PopId::new(3)];
         let employed = vec![PopId::new(10), PopId::new(11)];
         let queue = unemployed.clone();
-        let ladder = build_subsistence_reservation_ladder(&employed, &unemployed, 10.0, &cfg, &queue);
+        let ladder =
+            build_subsistence_reservation_ladder(&employed, &unemployed, 10.0, &cfg, &queue);
 
         // Employed reservation = q(U+1) * price where U=3, NO risk premium
         let expected = subsistence_output_per_worker(4, cfg.q_max, cfg.carrying_capacity) * 10.0;
@@ -237,7 +267,8 @@ mod tests {
     #[test]
     fn worker_at_carrying_capacity_produces_q_max() {
         let cfg = SubsistenceReservationConfig::new(1, 1.5, 10, 10.0, 0.10);
-        let output = subsistence_output_per_worker(cfg.carrying_capacity, cfg.q_max, cfg.carrying_capacity);
+        let output =
+            subsistence_output_per_worker(cfg.carrying_capacity, cfg.q_max, cfg.carrying_capacity);
         assert!(
             (output - cfg.q_max).abs() < 1e-9,
             "worker at rank=K should produce q_max, got {output}"
@@ -292,11 +323,26 @@ mod tests {
         let employed = vec![];
         let queue = unemployed.clone();
 
-        let ladder_no = build_subsistence_reservation_ladder(&employed, &unemployed, 5.0, &cfg_no_premium, &queue);
-        let ladder_yes = build_subsistence_reservation_ladder(&employed, &unemployed, 5.0, &cfg_with_premium, &queue);
+        let ladder_no = build_subsistence_reservation_ladder(
+            &employed,
+            &unemployed,
+            5.0,
+            &cfg_no_premium,
+            &queue,
+        );
+        let ladder_yes = build_subsistence_reservation_ladder(
+            &employed,
+            &unemployed,
+            5.0,
+            &cfg_with_premium,
+            &queue,
+        );
 
         // With 20% premium, unemployed reservation should be 20% higher
         let ratio = ladder_yes[&PopId::new(1)] / ladder_no[&PopId::new(1)];
-        assert!((ratio - 1.20).abs() < 1e-9, "expected 1.20 ratio, got {ratio}");
+        assert!(
+            (ratio - 1.20).abs() < 1e-9,
+            "expected 1.20 ratio, got {ratio}"
+        );
     }
 }

@@ -246,7 +246,10 @@ mod tests {
     #[test]
     fn depth_mult_no_signal_returns_current() {
         let result = compute_depth_multiplier(2.5, None, 10.0);
-        assert!((result - 2.5).abs() < 1e-12, "no signal should keep current: {result}");
+        assert!(
+            (result - 2.5).abs() < 1e-12,
+            "no signal should keep current: {result}"
+        );
     }
 
     #[test]
@@ -294,8 +297,8 @@ mod tests {
         // Extreme deviation: local = 0.001, world = 10.0 => ratio = 0.0001, 1/ratio = 10000
         // target = 10000^0.5 = 100, capped at MAX_MULT
         let result = compute_depth_multiplier(1.0, Some(0.001), 10.0);
-        let expected = DEPTH_RESPONSE_ALPHA * DEPTH_RESPONSE_MAX_MULT
-            + (1.0 - DEPTH_RESPONSE_ALPHA) * 1.0;
+        let expected =
+            DEPTH_RESPONSE_ALPHA * DEPTH_RESPONSE_MAX_MULT + (1.0 - DEPTH_RESPONSE_ALPHA) * 1.0;
         assert!(
             (result - expected).abs() < 1e-9,
             "cap test: result={result}, expected={expected}"

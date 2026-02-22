@@ -5,15 +5,14 @@ use common::*;
 use std::collections::HashMap;
 
 use sim_core::{
-    GoodProfile, Need, NeedContribution, Recipe, ResourceQuality,
-    SubsistenceReservationConfig, UtilityCurve, World,
+    GoodProfile, Need, NeedContribution, Recipe, ResourceQuality, SubsistenceReservationConfig,
+    UtilityCurve, World,
 };
 const SUBSISTENCE_Q_MAX: f64 = 1.5;
 const SUBSISTENCE_CARRYING_CAPACITY: usize = 40;
 const FOOD_REQUIREMENT: f64 = 1.0;
 const FOOD_SURPLUS_CAP_RATIO: f64 = 1.25;
 const SUBSISTENCE_RESOURCE_QUALITY: ResourceQuality = ResourceQuality::Normal;
-
 
 fn subsistence_total_output(pop_count: usize, q_max: f64, carrying_capacity: usize) -> f64 {
     use sim_core::labor::subsistence::subsistence_output_per_worker;

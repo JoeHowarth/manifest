@@ -101,20 +101,22 @@ impl World {
     /// at the back, sorted by PopId.
     fn update_subsistence_queues(&mut self) {
         for settlement in self.settlements.values() {
-            let existing = self.subsistence_queues.remove(&settlement.id).unwrap_or_default();
+            let existing = self
+                .subsistence_queues
+                .remove(&settlement.id)
+                .unwrap_or_default();
 
             // Retain queue members that are still alive and still unemployed
             let mut queue: Vec<PopId> = existing
                 .into_iter()
-                .filter(|id| {
-                    self.pops.get(id).is_some_and(|p| p.employed_at.is_none())
-                })
+                .filter(|id| self.pops.get(id).is_some_and(|p| p.employed_at.is_none()))
                 .collect();
 
             let in_queue: std::collections::HashSet<PopId> = queue.iter().copied().collect();
 
             // Append newly unemployed pops not in queue, sorted by PopId
-            let mut new_unemployed: Vec<PopId> = settlement.pop_ids
+            let mut new_unemployed: Vec<PopId> = settlement
+                .pop_ids
                 .iter()
                 .copied()
                 .filter(|id| {
@@ -229,7 +231,9 @@ impl World {
                 };
 
             // Run the settlement tick
-            let subsistence_queue = self.subsistence_queues.get(&settlement_id)
+            let subsistence_queue = self
+                .subsistence_queues
+                .get(&settlement_id)
                 .map(|q| q.as_slice());
             let _result = run_settlement_tick(
                 self.tick,
@@ -676,7 +680,7 @@ impl World {
 
                     let (employed_ids, unemployed_ids): (Vec<PopId>, Vec<PopId>) = active_ids
                         .into_iter()
-                        .partition(|id| self.pops.get(id).map_or(false, |p| p.employed_at.is_some()));
+                        .partition(|id| self.pops.get(id).is_some_and(|p| p.employed_at.is_some()));
 
                     let grain_price_ref = self
                         .price_ema
@@ -684,12 +688,19 @@ impl World {
                         .copied()
                         .unwrap_or(cfg.default_grain_price);
 
-                    let queue = self.subsistence_queues.get(&settlement.id)
+                    let queue = self
+                        .subsistence_queues
+                        .get(&settlement.id)
                         .map(|q| q.as_slice())
                         .unwrap_or(&[]);
 
-                    let ladder =
-                        build_subsistence_reservation_ladder(&employed_ids, &unemployed_ids, grain_price_ref, cfg, queue);
+                    let ladder = build_subsistence_reservation_ladder(
+                        &employed_ids,
+                        &unemployed_ids,
+                        grain_price_ref,
+                        cfg,
+                        queue,
+                    );
                     by_pop.extend(ladder);
                 }
                 by_pop
@@ -1134,9 +1145,13 @@ impl World {
                 // Distribute deceased pop's estate (currency + goods) among
                 // up to 3 random surviving pops in the same settlement.
                 use rand::seq::SliceRandom;
-                let mut heirs: Vec<PopId> = self.pops.keys()
+                let mut heirs: Vec<PopId> = self
+                    .pops
+                    .keys()
                     .filter(|id| {
-                        self.pops.get(id).is_some_and(|p| p.home_settlement == pop.home_settlement)
+                        self.pops
+                            .get(id)
+                            .is_some_and(|p| p.home_settlement == pop.home_settlement)
                     })
                     .copied()
                     .collect();

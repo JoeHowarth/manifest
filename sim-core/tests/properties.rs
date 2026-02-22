@@ -435,12 +435,14 @@ fn isolated_settlements_dont_affect_each_other() {
     assert!(
         (london_final.currency - london_initial_currency).abs() < 1e-6,
         "London currency changed without trade: initial={:.6}, final={:.6}",
-        london_initial_currency, london_final.currency,
+        london_initial_currency,
+        london_final.currency,
     );
     assert!(
         (paris_final.currency - paris_initial_currency).abs() < 1e-6,
         "Paris currency changed without trade: initial={:.6}, final={:.6}",
-        paris_initial_currency, paris_final.currency,
+        paris_initial_currency,
+        paris_final.currency,
     );
 }
 

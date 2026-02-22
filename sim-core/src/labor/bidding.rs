@@ -144,17 +144,29 @@ mod tests {
     /// RNG that always triggers lowering (returns 0.0 for random_bool checks)
     struct AlwaysLowerRng;
     impl rand::RngCore for AlwaysLowerRng {
-        fn next_u32(&mut self) -> u32 { 0 }
-        fn next_u64(&mut self) -> u64 { 0 }
-        fn fill_bytes(&mut self, dest: &mut [u8]) { dest.fill(0); }
+        fn next_u32(&mut self) -> u32 {
+            0
+        }
+        fn next_u64(&mut self) -> u64 {
+            0
+        }
+        fn fill_bytes(&mut self, dest: &mut [u8]) {
+            dest.fill(0);
+        }
     }
 
     /// RNG that never triggers lowering (returns max for random_bool checks)
     struct NeverLowerRng;
     impl rand::RngCore for NeverLowerRng {
-        fn next_u32(&mut self) -> u32 { u32::MAX }
-        fn next_u64(&mut self) -> u64 { u64::MAX }
-        fn fill_bytes(&mut self, dest: &mut [u8]) { dest.fill(0xFF); }
+        fn next_u32(&mut self) -> u32 {
+            u32::MAX
+        }
+        fn next_u64(&mut self) -> u64 {
+            u64::MAX
+        }
+        fn fill_bytes(&mut self, dest: &mut [u8]) {
+            dest.fill(0xFF);
+        }
     }
 
     #[test]

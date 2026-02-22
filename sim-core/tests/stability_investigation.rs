@@ -17,7 +17,6 @@ struct Scenario {
     transport_bps: f64,
 }
 
-
 fn create_world(
     num_pops: usize,
     num_facilities: usize,
@@ -589,7 +588,9 @@ fn investigate_population_trap() {
         },
     );
     world.set_external_market(external);
-    world.set_subsistence_reservation(SubsistenceReservationConfig::new(GRAIN, 1.5, 10, 10.0, 0.10));
+    world.set_subsistence_reservation(SubsistenceReservationConfig::new(
+        GRAIN, 1.5, 10, 10.0, 0.10,
+    ));
 
     let recipes = vec![make_grain_recipe(production_rate)];
     let good_profiles = make_grain_profile();
@@ -685,7 +686,9 @@ fn investigate_population_trap() {
         .filter(|&(&t, _)| t >= 100.0)
         .map(|(_, &d)| d)
         .sum();
-    println!("  Deaths by phase: early(<20)={early_deaths:.0} mid(20-99)={mid_deaths:.0} late(100+)={late_deaths:.0}");
+    println!(
+        "  Deaths by phase: early(<20)={early_deaths:.0} mid(20-99)={mid_deaths:.0} late(100+)={late_deaths:.0}"
+    );
 
     // ── CLAIM 2: Food satisfaction drops below 0.9 during crisis, preventing growth ──
     println!("\n--- CLAIM 2: Food satisfaction timeline ---");
@@ -707,7 +710,12 @@ fn investigate_population_trap() {
     let avg_growth_probs = col_f64(&food_sat_by_tick, "avg_growth_prob");
 
     // Show phases
-    let phases = [(0, 20, "early"), (20, 100, "mid"), (100, 200, "late"), (200, 300, "final")];
+    let phases = [
+        (0, 20, "early"),
+        (20, 100, "mid"),
+        (100, 200, "late"),
+        (200, 300, "final"),
+    ];
     for (start, end, label) in &phases {
         let sats: Vec<f64> = avg_sats
             .iter()
@@ -732,7 +740,9 @@ fn investigate_population_trap() {
 
     // ── CLAIM 3: Merchant runs out of goods during crisis, can't sell to pops ──
     println!("\n--- CLAIM 3: Merchant stock and production timeline ---");
-    let stock_flow = dfs.get("stock_flow_good").expect("stock_flow_good dataframe");
+    let stock_flow = dfs
+        .get("stock_flow_good")
+        .expect("stock_flow_good dataframe");
     let merchant_goods_by_tick = stock_flow
         .clone()
         .lazy()
@@ -1175,7 +1185,9 @@ fn investigate_feedback_loops() {
         },
     );
     world.set_external_market(external);
-    world.set_subsistence_reservation(SubsistenceReservationConfig::new(GRAIN, 1.5, 10, 10.0, 0.10));
+    world.set_subsistence_reservation(SubsistenceReservationConfig::new(
+        GRAIN, 1.5, 10, 10.0, 0.10,
+    ));
 
     let recipes = vec![make_grain_recipe(production_rate)];
     let good_profiles = make_grain_profile();
@@ -1197,7 +1209,9 @@ fn investigate_feedback_loops() {
     let consumption = dfs.get("consumption").expect("consumption dataframe");
     let mortality = dfs.get("mortality").expect("mortality dataframe");
     let stock_flow = dfs.get("stock_flow").expect("stock_flow dataframe");
-    let stock_flow_good = dfs.get("stock_flow_good").expect("stock_flow_good dataframe");
+    let stock_flow_good = dfs
+        .get("stock_flow_good")
+        .expect("stock_flow_good dataframe");
 
     // ── H1: Price EMA is self-reinforcing ──
     // Reconstruct the price EMA from clearing prices
@@ -1229,7 +1243,10 @@ fn investigate_feedback_loops() {
     }
 
     // Show at key ticks
-    println!("  {:>6} {:>10} {:>10} {:>10}", "tick", "clearing", "ema", "clear/ema");
+    println!(
+        "  {:>6} {:>10} {:>10} {:>10}",
+        "tick", "clearing", "ema", "clear/ema"
+    );
     let sample_ticks = [0, 5, 10, 15, 20, 30, 50, 75, 100, 150, 200, 250, 299];
     for &t in &sample_ticks {
         if let Some(idx) = clearing_ticks.iter().position(|&x| x as usize == t) {
@@ -1248,11 +1265,14 @@ fn investigate_feedback_loops() {
         .map(|((_, &cp), &em)| cp / em)
         .collect();
     if !late_ratios.is_empty() {
-        println!("\n  Late-phase (t>=50) clearing/EMA: mean={:.4} std={:.4}",
+        println!(
+            "\n  Late-phase (t>=50) clearing/EMA: mean={:.4} std={:.4}",
             mean(&late_ratios),
             {
                 let m = mean(&late_ratios);
-                (late_ratios.iter().map(|x| (x - m).powi(2)).sum::<f64>() / late_ratios.len() as f64).sqrt()
+                (late_ratios.iter().map(|x| (x - m).powi(2)).sum::<f64>()
+                    / late_ratios.len() as f64)
+                    .sqrt()
             }
         );
     }
@@ -1276,15 +1296,24 @@ fn investigate_feedback_loops() {
     let avg_wages = col_f64(&wages_by_tick, "avg_wage");
     let wage_ticks = col_f64(&wages_by_tick, "tick");
 
-    println!("  {:>6} {:>10} {:>10} {:>10} {:>10}", "tick", "avg_wage", "clearing_p", "w/p ratio", "units_afford");
+    println!(
+        "  {:>6} {:>10} {:>10} {:>10} {:>10}",
+        "tick", "avg_wage", "clearing_p", "w/p ratio", "units_afford"
+    );
     for &t in &sample_ticks {
         let w_idx = wage_ticks.iter().position(|&x| x as usize == t);
         let c_idx = clearing_ticks.iter().position(|&x| x as usize == t);
         if let (Some(wi), Some(ci)) = (w_idx, c_idx) {
             let w = avg_wages[wi];
             let p = clearing_prices[ci];
-            println!("  {:>6} {:>10.4} {:>10.4} {:>10.4} {:>10.4}",
-                t, w, p, w / p, w / p);
+            println!(
+                "  {:>6} {:>10.4} {:>10.4} {:>10.4} {:>10.4}",
+                t,
+                w,
+                p,
+                w / p,
+                w / p
+            );
         }
     }
 
@@ -1337,13 +1366,24 @@ fn investigate_feedback_loops() {
         computed_caps.push((target, norm_c, release, cap));
     }
 
-    println!("  {:>6} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}",
-        "tick", "stock", "des_ema", "target", "norm_c", "release", "cap", "actual");
+    println!(
+        "  {:>6} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}",
+        "tick", "stock", "des_ema", "target", "norm_c", "release", "cap", "actual"
+    );
     for &t in &sample_ticks {
         if let Some(idx) = stock_ticks.iter().position(|&x| x as usize == t) {
             let (target, norm_c, release, cap) = computed_caps[idx];
-            println!("  {:>6} {:>8.3} {:>8.3} {:>8.3} {:>8.3} {:>8.3} {:>8.3} {:>8.3}",
-                t, avg_stocks[idx], target / 5.0, target, norm_c, release, cap, avg_actual[idx]);
+            println!(
+                "  {:>6} {:>8.3} {:>8.3} {:>8.3} {:>8.3} {:>8.3} {:>8.3} {:>8.3}",
+                t,
+                avg_stocks[idx],
+                target / 5.0,
+                target,
+                norm_c,
+                release,
+                cap,
+                avg_actual[idx]
+            );
         }
     }
 
@@ -1364,11 +1404,17 @@ fn investigate_feedback_loops() {
         .unwrap();
 
     // Compare sell order structure at early vs late ticks
-    for (phase_name, t_start, t_end) in [("early(5-15)", 5.0, 15.0), ("late(200-250)", 200.0, 250.0)] {
+    for (phase_name, t_start, t_end) in
+        [("early(5-15)", 5.0, 15.0), ("late(200-250)", 200.0, 250.0)]
+    {
         let phase = merchant_sell_detail
             .clone()
             .lazy()
-            .filter(col("tick").gt_eq(lit(t_start)).and(col("tick").lt(lit(t_end))))
+            .filter(
+                col("tick")
+                    .gt_eq(lit(t_start))
+                    .and(col("tick").lt(lit(t_end))),
+            )
             .group_by([col("limit_price")])
             .agg([
                 col("quantity").mean().alias("avg_qty"),
@@ -1415,16 +1461,37 @@ fn investigate_feedback_loops() {
     let revenue_ticks = col_f64(&merchant_revenue_by_tick, "tick");
     let revenues = col_f64(&merchant_revenue_by_tick, "revenue");
 
-    println!("  {:>6} {:>10} {:>10} {:>10} {:>10} {:>10}",
-        "tick", "m_currency", "m_stock", "revenue", "wages", "net_flow");
+    println!(
+        "  {:>6} {:>10} {:>10} {:>10} {:>10} {:>10}",
+        "tick", "m_currency", "m_stock", "revenue", "wages", "net_flow"
+    );
     for &t in &sample_ticks {
-        let mc = mc_ticks.iter().position(|&x| x as usize == t).map(|i| merchant_currency[i]);
-        let mg = mg_ticks.iter().position(|&x| x as usize == t).map(|i| merchant_goods[i]);
-        let rev = revenue_ticks.iter().position(|&x| x as usize == t).map(|i| revenues[i]);
-        let wag = wage_ticks.iter().position(|&x| x as usize == t).map(|i| total_wages_series[i]);
+        let mc = mc_ticks
+            .iter()
+            .position(|&x| x as usize == t)
+            .map(|i| merchant_currency[i]);
+        let mg = mg_ticks
+            .iter()
+            .position(|&x| x as usize == t)
+            .map(|i| merchant_goods[i]);
+        let rev = revenue_ticks
+            .iter()
+            .position(|&x| x as usize == t)
+            .map(|i| revenues[i]);
+        let wag = wage_ticks
+            .iter()
+            .position(|&x| x as usize == t)
+            .map(|i| total_wages_series[i]);
         if let (Some(c), Some(g), Some(r), Some(w)) = (mc, mg, rev, wag) {
-            println!("  {:>6} {:>10.2} {:>10.2} {:>10.4} {:>10.4} {:>10.4}",
-                t, c, g, r, w, r - w);
+            println!(
+                "  {:>6} {:>10.2} {:>10.2} {:>10.4} {:>10.4} {:>10.4}",
+                t,
+                c,
+                g,
+                r,
+                w,
+                r - w
+            );
         }
     }
 
@@ -1443,11 +1510,17 @@ fn investigate_feedback_loops() {
         .collect()
         .unwrap();
 
-    for (phase_name, t_start, t_end) in [("early(5-15)", 5.0, 15.0), ("late(200-250)", 200.0, 250.0)] {
+    for (phase_name, t_start, t_end) in
+        [("early(5-15)", 5.0, 15.0), ("late(200-250)", 200.0, 250.0)]
+    {
         let phase_stats = pop_bid_detail
             .clone()
             .lazy()
-            .filter(col("tick").gt_eq(lit(t_start)).and(col("tick").lt(lit(t_end))))
+            .filter(
+                col("tick")
+                    .gt_eq(lit(t_start))
+                    .and(col("tick").lt(lit(t_end))),
+            )
             .select([
                 col("limit_price").mean().alias("avg_bid"),
                 col("limit_price").min().alias("min_bid"),
@@ -1457,11 +1530,37 @@ fn investigate_feedback_loops() {
             ])
             .collect()
             .unwrap();
-        let avg_bid = phase_stats.column("avg_bid").unwrap().f64().unwrap().get(0).unwrap_or(0.0);
-        let min_bid = phase_stats.column("min_bid").unwrap().f64().unwrap().get(0).unwrap_or(0.0);
-        let max_bid = phase_stats.column("max_bid").unwrap().f64().unwrap().get(0).unwrap_or(0.0);
-        let avg_qty = phase_stats.column("avg_qty").unwrap().f64().unwrap().get(0).unwrap_or(0.0);
-        println!("  {phase_name}: bid_range=[{min_bid:.4}, {max_bid:.4}] avg_bid={avg_bid:.4} avg_qty_per_order={avg_qty:.4}");
+        let avg_bid = phase_stats
+            .column("avg_bid")
+            .unwrap()
+            .f64()
+            .unwrap()
+            .get(0)
+            .unwrap_or(0.0);
+        let min_bid = phase_stats
+            .column("min_bid")
+            .unwrap()
+            .f64()
+            .unwrap()
+            .get(0)
+            .unwrap_or(0.0);
+        let max_bid = phase_stats
+            .column("max_bid")
+            .unwrap()
+            .f64()
+            .unwrap()
+            .get(0)
+            .unwrap_or(0.0);
+        let avg_qty = phase_stats
+            .column("avg_qty")
+            .unwrap()
+            .f64()
+            .unwrap()
+            .get(0)
+            .unwrap_or(0.0);
+        println!(
+            "  {phase_name}: bid_range=[{min_bid:.4}, {max_bid:.4}] avg_bid={avg_bid:.4} avg_qty_per_order={avg_qty:.4}"
+        );
     }
 
     // ── H7: Budget constraint binding? ──
@@ -1512,8 +1611,10 @@ fn investigate_feedback_loops() {
         .collect();
     let pop_ticks = col_f64(&pop_count_by_tick, "tick");
 
-    println!("  {:>6} {:>6} {:>10} {:>10} {:>10} {:>10}",
-        "tick", "pops", "fill_qty", "spent", "per_pop_qty", "per_pop_$");
+    println!(
+        "  {:>6} {:>6} {:>10} {:>10} {:>10} {:>10}",
+        "tick", "pops", "fill_qty", "spent", "per_pop_qty", "per_pop_$"
+    );
     for &t in &sample_ticks {
         let fi = fill_ticks.iter().position(|&x| x as usize == t);
         let pi = pop_ticks.iter().position(|&x| x as usize == t);
@@ -1521,8 +1622,15 @@ fn investigate_feedback_loops() {
             let pops = pop_counts[pi];
             let qty = fill_qty_series[fi];
             let spent = total_spent_series[fi];
-            println!("  {:>6} {:>6.0} {:>10.3} {:>10.4} {:>10.4} {:>10.4}",
-                t, pops, qty, spent, qty / pops.max(1.0), spent / pops.max(1.0));
+            println!(
+                "  {:>6} {:>6.0} {:>10.3} {:>10.4} {:>10.4} {:>10.4}",
+                t,
+                pops,
+                qty,
+                spent,
+                qty / pops.max(1.0),
+                spent / pops.max(1.0)
+            );
         }
     }
 
@@ -1534,32 +1642,42 @@ fn investigate_feedback_loops() {
     // Compute late-phase averages
     let phases = [(100, 300, "trapped (t=100-300)")];
     for (start, end, label) in &phases {
-        let late_wages: Vec<f64> = wage_ticks.iter().zip(avg_wages.iter())
+        let late_wages: Vec<f64> = wage_ticks
+            .iter()
+            .zip(avg_wages.iter())
             .filter(|&(&t, _)| t >= *start as f64 && t < *end as f64)
             .map(|(_, &w)| w)
             .collect();
-        let late_clearing: Vec<f64> = clearing_ticks.iter().zip(clearing_prices.iter())
+        let late_clearing: Vec<f64> = clearing_ticks
+            .iter()
+            .zip(clearing_prices.iter())
             .filter(|&(&t, _)| t >= *start as f64 && t < *end as f64)
             .map(|(_, &p)| p)
             .collect();
-        let late_stock: Vec<f64> = stock_ticks.iter().zip(avg_stocks.iter())
+        let late_stock: Vec<f64> = stock_ticks
+            .iter()
+            .zip(avg_stocks.iter())
             .filter(|&(&t, _)| t >= *start as f64 && t < *end as f64)
             .map(|(_, &s)| s)
             .collect();
-        let late_actual: Vec<f64> = stock_ticks.iter().zip(avg_actual.iter())
+        let late_actual: Vec<f64> = stock_ticks
+            .iter()
+            .zip(avg_actual.iter())
             .filter(|&(&t, _)| t >= *start as f64 && t < *end as f64)
             .map(|(_, &a)| a)
             .collect();
-        let late_fill_per_pop: Vec<f64> = fill_ticks.iter().zip(fill_qty_series.iter())
-            .zip(
-                fill_ticks.iter().map(|&ft| {
-                    pop_ticks.iter().zip(pop_counts.iter())
-                        .filter(|&(&pt, _)| pt <= ft)
-                        .last()
-                        .map(|(_, &c)| c)
-                        .unwrap_or(100.0)
-                })
-            )
+        let late_fill_per_pop: Vec<f64> = fill_ticks
+            .iter()
+            .zip(fill_qty_series.iter())
+            .zip(fill_ticks.iter().map(|&ft| {
+                pop_ticks
+                    .iter()
+                    .zip(pop_counts.iter())
+                    .filter(|&(&pt, _)| pt <= ft)
+                    .last()
+                    .map(|(_, &c)| c)
+                    .unwrap_or(100.0)
+            }))
             .filter(|&((&t, _), _)| t >= *start as f64 && t < *end as f64)
             .map(|((_, &qty), pops)| qty / pops.max(1.0))
             .collect();
@@ -1567,17 +1685,32 @@ fn investigate_feedback_loops() {
         println!("  {} averages:", label);
         println!("    wage:             {:.4}", mean(&late_wages));
         println!("    clearing price:   {:.4}", mean(&late_clearing));
-        println!("    wage/price:       {:.4}", mean(&late_wages) / mean(&late_clearing).max(0.001));
+        println!(
+            "    wage/price:       {:.4}",
+            mean(&late_wages) / mean(&late_clearing).max(0.001)
+        );
         println!("    pop stock:        {:.4}", mean(&late_stock));
         println!("    actual consumed:  {:.4}", mean(&late_actual));
         println!("    fill per pop:     {:.4}", mean(&late_fill_per_pop));
-        println!("    surplus = actual - 1.0: {:.4}", mean(&late_actual) - 1.0);
+        println!(
+            "    surplus = actual - 1.0: {:.4}",
+            mean(&late_actual) - 1.0
+        );
         let wage_price = mean(&late_wages) / mean(&late_clearing).max(0.001);
         println!();
         println!("  Key ratios:");
-        println!("    Units affordable per pop (wage/price): {:.4}", wage_price);
-        println!("    Actual units consumed per pop:         {:.4}", mean(&late_actual));
-        println!("    Gap (affordable - consumed):           {:.4}", wage_price - mean(&late_actual));
+        println!(
+            "    Units affordable per pop (wage/price): {:.4}",
+            wage_price
+        );
+        println!(
+            "    Actual units consumed per pop:         {:.4}",
+            mean(&late_actual)
+        );
+        println!(
+            "    Gap (affordable - consumed):           {:.4}",
+            wage_price - mean(&late_actual)
+        );
     }
 
     // ── H8: External anchor draining grain? ──
@@ -1607,11 +1740,37 @@ fn investigate_feedback_loops() {
             .collect()
             .unwrap();
         for i in 0..totals.height() {
-            let flow_name = totals.column("flow").unwrap().str().unwrap().get(i).unwrap_or("");
-            let total = totals.column("total_qty").unwrap().f64().unwrap().get(i).unwrap_or(0.0);
-            let avg = totals.column("avg_per_tick").unwrap().f64().unwrap().get(i).unwrap_or(0.0);
-            let ticks_active = totals.column("active_ticks").unwrap().u32().unwrap().get(i).unwrap_or(0);
-            println!("    {flow_name}: total={total:.2} avg_per_event={avg:.4} active_ticks={ticks_active}");
+            let flow_name = totals
+                .column("flow")
+                .unwrap()
+                .str()
+                .unwrap()
+                .get(i)
+                .unwrap_or("");
+            let total = totals
+                .column("total_qty")
+                .unwrap()
+                .f64()
+                .unwrap()
+                .get(i)
+                .unwrap_or(0.0);
+            let avg = totals
+                .column("avg_per_tick")
+                .unwrap()
+                .f64()
+                .unwrap()
+                .get(i)
+                .unwrap_or(0.0);
+            let ticks_active = totals
+                .column("active_ticks")
+                .unwrap()
+                .u32()
+                .unwrap()
+                .get(i)
+                .unwrap_or(0);
+            println!(
+                "    {flow_name}: total={total:.2} avg_per_event={avg:.4} active_ticks={ticks_active}"
+            );
         }
 
         // Show external orders
@@ -1632,13 +1791,51 @@ fn investigate_feedback_loops() {
                 .unwrap();
             println!("\n  External orders in market:");
             for i in 0..ext_orders.height() {
-                let side = ext_orders.column("side").unwrap().str().unwrap().get(i).unwrap_or("");
-                let qty = ext_orders.column("total_qty").unwrap().f64().unwrap().get(i).unwrap_or(0.0);
-                let avg_p = ext_orders.column("avg_price").unwrap().f64().unwrap().get(i).unwrap_or(0.0);
-                let min_p = ext_orders.column("min_price").unwrap().f64().unwrap().get(i).unwrap_or(0.0);
-                let max_p = ext_orders.column("max_price").unwrap().f64().unwrap().get(i).unwrap_or(0.0);
-                let n: u32 = ext_orders.column("n_orders").unwrap().u32().unwrap().get(i).unwrap_or(0);
-                println!("    {side}: total_qty={qty:.2} price_range=[{min_p:.4},{max_p:.4}] avg_price={avg_p:.4} n={n}");
+                let side = ext_orders
+                    .column("side")
+                    .unwrap()
+                    .str()
+                    .unwrap()
+                    .get(i)
+                    .unwrap_or("");
+                let qty = ext_orders
+                    .column("total_qty")
+                    .unwrap()
+                    .f64()
+                    .unwrap()
+                    .get(i)
+                    .unwrap_or(0.0);
+                let avg_p = ext_orders
+                    .column("avg_price")
+                    .unwrap()
+                    .f64()
+                    .unwrap()
+                    .get(i)
+                    .unwrap_or(0.0);
+                let min_p = ext_orders
+                    .column("min_price")
+                    .unwrap()
+                    .f64()
+                    .unwrap()
+                    .get(i)
+                    .unwrap_or(0.0);
+                let max_p = ext_orders
+                    .column("max_price")
+                    .unwrap()
+                    .f64()
+                    .unwrap()
+                    .get(i)
+                    .unwrap_or(0.0);
+                let n: u32 = ext_orders
+                    .column("n_orders")
+                    .unwrap()
+                    .u32()
+                    .unwrap()
+                    .get(i)
+                    .unwrap_or(0);
+                println!(
+                    "    {side}: total_qty={qty:.2} price_range=[{min_p:.4},{max_p:.4}] avg_price={avg_p:.4} n={n}"
+                );
             }
         }
 
@@ -1657,10 +1854,34 @@ fn investigate_feedback_loops() {
             .unwrap();
         println!("\n  External fills (actual trades with external market):");
         for i in 0..ext_fills.height() {
-            let side = ext_fills.column("side").unwrap().str().unwrap().get(i).unwrap_or("");
-            let qty = ext_fills.column("total_qty").unwrap().f64().unwrap().get(i).unwrap_or(0.0);
-            let avg_p = ext_fills.column("avg_price").unwrap().f64().unwrap().get(i).unwrap_or(0.0);
-            let val = ext_fills.column("total_value").unwrap().f64().unwrap().get(i).unwrap_or(0.0);
+            let side = ext_fills
+                .column("side")
+                .unwrap()
+                .str()
+                .unwrap()
+                .get(i)
+                .unwrap_or("");
+            let qty = ext_fills
+                .column("total_qty")
+                .unwrap()
+                .f64()
+                .unwrap()
+                .get(i)
+                .unwrap_or(0.0);
+            let avg_p = ext_fills
+                .column("avg_price")
+                .unwrap()
+                .f64()
+                .unwrap()
+                .get(i)
+                .unwrap_or(0.0);
+            let val = ext_fills
+                .column("total_value")
+                .unwrap()
+                .f64()
+                .unwrap()
+                .get(i)
+                .unwrap_or(0.0);
             println!("    {side}: total_qty={qty:.2} avg_price={avg_p:.4} total_value={val:.2}");
         }
     } else {
@@ -1695,7 +1916,11 @@ fn investigate_feedback_loops() {
     let ext_fill_by_tick = fill
         .clone()
         .lazy()
-        .filter(col("agent_type").eq(lit("external")).and(col("side").eq(lit("buy"))))
+        .filter(
+            col("agent_type")
+                .eq(lit("external"))
+                .and(col("side").eq(lit("buy"))),
+        )
         .group_by([col("tick")])
         .agg([col("quantity").sum().alias("exported")])
         .sort(["tick"], Default::default())
@@ -1705,8 +1930,18 @@ fn investigate_feedback_loops() {
     // Join all three
     let accounting = prod_by_tick
         .lazy()
-        .join(cons_by_tick.lazy(), [col("tick")], [col("tick")], JoinArgs::new(JoinType::Left))
-        .join(ext_fill_by_tick.lazy(), [col("tick")], [col("tick")], JoinArgs::new(JoinType::Left))
+        .join(
+            cons_by_tick.lazy(),
+            [col("tick")],
+            [col("tick")],
+            JoinArgs::new(JoinType::Left),
+        )
+        .join(
+            ext_fill_by_tick.lazy(),
+            [col("tick")],
+            [col("tick")],
+            JoinArgs::new(JoinType::Left),
+        )
         .with_column(col("exported").fill_null(lit(0.0)))
         .with_column(col("consumed").fill_null(lit(0.0)))
         .with_column((col("produced") - col("consumed") - col("exported")).alias("residual"))
@@ -1720,27 +1955,41 @@ fn investigate_feedback_loops() {
     let acc_exported = col_f64(&accounting, "exported");
     let acc_residual = col_f64(&accounting, "residual");
 
-    println!("  {:>6} {:>10} {:>10} {:>10} {:>10}", "tick", "produced", "consumed", "exported", "residual");
+    println!(
+        "  {:>6} {:>10} {:>10} {:>10} {:>10}",
+        "tick", "produced", "consumed", "exported", "residual"
+    );
     for &t in &sample_ticks {
         if let Some(idx) = acc_ticks.iter().position(|&x| x as usize == t) {
-            println!("  {:>6} {:>10.3} {:>10.3} {:>10.3} {:>10.3}",
-                t, acc_produced[idx], acc_consumed[idx], acc_exported[idx], acc_residual[idx]);
+            println!(
+                "  {:>6} {:>10.3} {:>10.3} {:>10.3} {:>10.3}",
+                t, acc_produced[idx], acc_consumed[idx], acc_exported[idx], acc_residual[idx]
+            );
         }
     }
 
     // Late-phase averages
-    let late_acc: Vec<(f64, f64, f64, f64)> = acc_ticks.iter()
-        .zip(acc_produced.iter().zip(acc_consumed.iter().zip(acc_exported.iter().zip(acc_residual.iter()))))
+    let late_acc: Vec<(f64, f64, f64, f64)> = acc_ticks
+        .iter()
+        .zip(
+            acc_produced.iter().zip(
+                acc_consumed
+                    .iter()
+                    .zip(acc_exported.iter().zip(acc_residual.iter())),
+            ),
+        )
         .filter(|&(&t, _)| t >= 100.0)
         .map(|(_, (&p, (&c, (&e, &r))))| (p, c, e, r))
         .collect();
     if !late_acc.is_empty() {
         let n = late_acc.len() as f64;
-        println!("\n  Late avg (t>=100): produced={:.3} consumed={:.3} exported={:.3} residual={:.3}",
+        println!(
+            "\n  Late avg (t>=100): produced={:.3} consumed={:.3} exported={:.3} residual={:.3}",
             late_acc.iter().map(|x| x.0).sum::<f64>() / n,
             late_acc.iter().map(|x| x.1).sum::<f64>() / n,
             late_acc.iter().map(|x| x.2).sum::<f64>() / n,
-            late_acc.iter().map(|x| x.3).sum::<f64>() / n);
+            late_acc.iter().map(|x| x.3).sum::<f64>() / n
+        );
     }
 
     println!();
@@ -1789,17 +2038,19 @@ fn investigate_monopsony_vs_competition() {
         let mut world = World::new();
         let settlement = world.add_settlement("TestTown", (0.0, 0.0));
 
-        let merchants: Vec<_> = (0..num_merchants).map(|_| {
-            let m = world.add_merchant();
-            {
-                let merchant = world.get_merchant_mut(m).unwrap();
-                merchant.currency = 10_000.0;
-                merchant
-                    .stockpile_at(settlement)
-                    .add(GRAIN, initial_merchant_stock / num_merchants as f64);
-            }
-            m
-        }).collect();
+        let merchants: Vec<_> = (0..num_merchants)
+            .map(|_| {
+                let m = world.add_merchant();
+                {
+                    let merchant = world.get_merchant_mut(m).unwrap();
+                    merchant.currency = 10_000.0;
+                    merchant
+                        .stockpile_at(settlement)
+                        .add(GRAIN, initial_merchant_stock / num_merchants as f64);
+                }
+                m
+            })
+            .collect();
 
         // Create facilities — divide ownership across merchants
         let mut facility_ids = Vec::new();
@@ -1835,7 +2086,9 @@ fn investigate_monopsony_vs_competition() {
         world.price_ema.insert((settlement, GRAIN), initial_price);
 
         // Enable subsistence reservation (low reservation wages)
-        world.subsistence_reservation = Some(SubsistenceReservationConfig::new(GRAIN, 1.5, 10, 10.0, 0.10));
+        world.subsistence_reservation = Some(SubsistenceReservationConfig::new(
+            GRAIN, 1.5, 10, 10.0, 0.10,
+        ));
 
         // Light external anchor — don't drain everything
         let mut external = ExternalMarketConfig::default();
@@ -1870,8 +2123,10 @@ fn investigate_monopsony_vs_competition() {
         let dfs = rec.get();
 
         // --- Analyze results ---
-        println!("--- {label} ({num_merchants} merchant{}) ---",
-            if num_merchants > 1 { "s" } else { "" });
+        println!(
+            "--- {label} ({num_merchants} merchant{}) ---",
+            if num_merchants > 1 { "s" } else { "" }
+        );
 
         // Population trajectory
         if let Some(pop_df) = dfs.get("pop_tick") {
@@ -1908,8 +2163,15 @@ fn investigate_monopsony_vs_competition() {
                 let wages = col_f64(labor_df, "clearing_wage");
                 let tail_wages = trailing(&wages, 40);
                 let avg_wage = mean(tail_wages);
-                let ratio = if avg_price > 0.0 { avg_wage / avg_price } else { 0.0 };
-                println!("  Tail wage/price: {:.4} (MVP ceiling = {production_rate})", ratio);
+                let ratio = if avg_price > 0.0 {
+                    avg_wage / avg_price
+                } else {
+                    0.0
+                };
+                println!(
+                    "  Tail wage/price: {:.4} (MVP ceiling = {production_rate})",
+                    ratio
+                );
             }
         }
 
@@ -1917,8 +2179,13 @@ fn investigate_monopsony_vs_competition() {
         for (fid, bid_state) in &world.facility_bid_states {
             if let Some(&bid) = bid_state.bids.get(&LABORER) {
                 let price_ema = world.price_ema.values().next().copied().unwrap_or(1.0);
-                println!("  Facility {:?} adaptive_bid={:.4} (price_ema={:.4}, MVP={:.4})",
-                    fid.0, bid, price_ema, production_rate * price_ema);
+                println!(
+                    "  Facility {:?} adaptive_bid={:.4} (price_ema={:.4}, MVP={:.4})",
+                    fid.0,
+                    bid,
+                    price_ema,
+                    production_rate * price_ema
+                );
             }
         }
 
@@ -1926,12 +2193,17 @@ fn investigate_monopsony_vs_competition() {
         for (i, &mid) in merchants.iter().enumerate() {
             if let Some(m) = world.get_merchant_mut(mid) {
                 let grain = m.stockpile_at(settlement).get(GRAIN);
-                println!("  Merchant {i} currency={:.1} grain={:.1}", m.currency, grain);
+                println!(
+                    "  Merchant {i} currency={:.1} grain={:.1}",
+                    m.currency, grain
+                );
             }
         }
 
         // Pop stocks (are workers accumulating food?)
-        let pop_stocks: Vec<f64> = world.pops.values()
+        let pop_stocks: Vec<f64> = world
+            .pops
+            .values()
             .map(|p| p.stocks.get(&GRAIN).copied().unwrap_or(0.0))
             .collect();
         if !pop_stocks.is_empty() {
@@ -1944,7 +2216,9 @@ fn investigate_monopsony_vs_competition() {
 
     println!("Expected:");
     println!("  Monopsony: wage/price ≈ 1.0 (employer won't bid up, no competition)");
-    println!("  Competition: wage/price → {production_rate} (employers outbid each other toward MVP)");
+    println!(
+        "  Competition: wage/price → {production_rate} (employers outbid each other toward MVP)"
+    );
     println!("{}", "=".repeat(80));
 }
 
@@ -1987,7 +2261,8 @@ fn run_convergence_investigation(production_rate: f64) {
     {
         let m = world.get_merchant_mut(merchant).unwrap();
         m.currency = 10_000.0;
-        m.stockpile_at(settlement).add(GRAIN, initial_merchant_stock);
+        m.stockpile_at(settlement)
+            .add(GRAIN, initial_merchant_stock);
     }
 
     let workers_per_facility = num_pops.div_ceil(num_facilities);
@@ -2040,7 +2315,13 @@ fn run_convergence_investigation(production_rate: f64) {
         },
     );
     world.set_external_market(external);
-    world.set_subsistence_reservation(SubsistenceReservationConfig::new(GRAIN, 1.5, num_pops / 2, 10.0, 0.10));
+    world.set_subsistence_reservation(SubsistenceReservationConfig::new(
+        GRAIN,
+        1.5,
+        num_pops / 2,
+        10.0,
+        0.10,
+    ));
 
     let recipes = vec![make_grain_recipe(production_rate)];
     let good_profiles = make_grain_profile();
@@ -2066,10 +2347,16 @@ fn run_convergence_investigation(production_rate: f64) {
     println!("=== CONVERGENCE INVESTIGATION (production_rate={production_rate}) ===");
     println!("=== 100 pops, 2 fac (monopsony), start unemployed, K={k}, q_max=1.5, min_wage=0 ===");
     println!("  Export price floor: [{worst_export_price:.4}, {best_export_price:.4}]");
-    println!("  MVP at price floor: [{:.4}, {:.4}]",
-        production_rate * worst_export_price, production_rate * best_export_price);
-    println!("  Subsistence q at K/2 unemployed: q({}) = {:.4}",
-        k/2 + 1, 1.5 / (1.0 + alpha * (k/2) as f64));
+    println!(
+        "  MVP at price floor: [{:.4}, {:.4}]",
+        production_rate * worst_export_price,
+        production_rate * best_export_price
+    );
+    println!(
+        "  Subsistence q at K/2 unemployed: q({}) = {:.4}",
+        k / 2 + 1,
+        1.5 / (1.0 + alpha * (k / 2) as f64)
+    );
     println!("{}\n", "=".repeat(80));
 
     let assignment = dfs.get("assignment").expect("assignment df");
@@ -2086,8 +2373,16 @@ fn run_convergence_investigation(production_rate: f64) {
             col("pop_id").count().alias("pop_count"),
             col("food_satisfaction").mean().alias("avg_food_sat"),
             col("food_satisfaction").min().alias("min_food_sat"),
-            col("outcome").eq(lit("dies")).cast(DataType::Int32).sum().alias("deaths"),
-            col("outcome").eq(lit("grows")).cast(DataType::Int32).sum().alias("grows"),
+            col("outcome")
+                .eq(lit("dies"))
+                .cast(DataType::Int32)
+                .sum()
+                .alias("deaths"),
+            col("outcome")
+                .eq(lit("grows"))
+                .cast(DataType::Int32)
+                .sum()
+                .alias("grows"),
         ])
         .sort(["tick"], Default::default())
         .collect()
@@ -2116,24 +2411,36 @@ fn run_convergence_investigation(production_rate: f64) {
     let emp_counts = col_f64(&emp_by_tick, "employed");
     let avg_wages = col_f64(&emp_by_tick, "avg_wage");
 
-    println!("  {:>4} {:>5} {:>5} {:>8} {:>8} {:>6} {:>6} {:>8}",
-        "tick", "pops", "empl", "avg_sat", "min_sat", "death", "grow", "avg_wage");
+    println!(
+        "  {:>4} {:>5} {:>5} {:>8} {:>8} {:>6} {:>6} {:>8}",
+        "tick", "pops", "empl", "avg_sat", "min_sat", "death", "grow", "avg_wage"
+    );
     for t in 0..30usize {
         let pi = pop_ticks.iter().position(|&x| x as usize == t);
         let ei = emp_ticks.iter().position(|&x| x as usize == t);
         if let Some(pi) = pi {
             let empl = ei.map(|i| emp_counts[i]).unwrap_or(0.0);
             let wage = ei.map(|i| avg_wages[i]).unwrap_or(0.0);
-            println!("  {:>4} {:>5.0} {:>5.0} {:>8.4} {:>8.4} {:>6.0} {:>6.0} {:>8.4}",
-                t, pop_counts[pi], empl, avg_food_sats[pi], min_food_sats[pi],
-                deaths_series[pi], grows_series[pi], wage);
+            println!(
+                "  {:>4} {:>5.0} {:>5.0} {:>8.4} {:>8.4} {:>6.0} {:>6.0} {:>8.4}",
+                t,
+                pop_counts[pi],
+                empl,
+                avg_food_sats[pi],
+                min_food_sats[pi],
+                deaths_series[pi],
+                grows_series[pi],
+                wage
+            );
         }
     }
 
     // ── 2: Labor bids vs asks (first 10 ticks) ──
     println!("\n--- 2: LABOR BIDS vs ASKS (first 10 ticks) ---\n");
 
-    let sample_ticks_full = [0, 5, 10, 20, 50, 100, 150, 200, 250, 300, 350, 400, 450, 499];
+    let sample_ticks_full = [
+        0, 5, 10, 20, 50, 100, 150, 200, 250, 300, 350, 400, 450, 499,
+    ];
 
     if let Some(labor_bid) = dfs.get("labor_bid") {
         let bids_summary = labor_bid
@@ -2157,12 +2464,16 @@ fn run_convergence_investigation(production_rate: f64) {
         let avg_adaptive = col_f64(&bids_summary, "avg_adaptive");
         let n_bids = col_f64(&bids_summary, "n_bids");
 
-        println!("  {:>4} {:>8} {:>8} {:>8} {:>6}",
-            "tick", "avg_bid", "avg_mvp", "adaptive", "n_bids");
+        println!(
+            "  {:>4} {:>8} {:>8} {:>8} {:>6}",
+            "tick", "avg_bid", "avg_mvp", "adaptive", "n_bids"
+        );
         for &t in &sample_ticks_full {
             if let Some(i) = bid_ticks.iter().position(|&x| x as usize == t) {
-                println!("  {:>4} {:>8.4} {:>8.4} {:>8.4} {:>6.0}",
-                    t, avg_bids[i], avg_mvps[i], avg_adaptive[i], n_bids[i]);
+                println!(
+                    "  {:>4} {:>8.4} {:>8.4} {:>8.4} {:>6.0}",
+                    t, avg_bids[i], avg_mvps[i], avg_adaptive[i], n_bids[i]
+                );
             }
         }
     } else {
@@ -2190,12 +2501,16 @@ fn run_convergence_investigation(production_rate: f64) {
         let max_asks = col_f64(&asks_summary, "max_ask");
         let n_asks = col_f64(&asks_summary, "n_asks");
 
-        println!("  {:>4} {:>8} {:>8} {:>8} {:>6}",
-            "tick", "avg_ask", "min_ask", "max_ask", "n_asks");
+        println!(
+            "  {:>4} {:>8} {:>8} {:>8} {:>6}",
+            "tick", "avg_ask", "min_ask", "max_ask", "n_asks"
+        );
         for &t in &sample_ticks_full {
             if let Some(i) = ask_ticks.iter().position(|&x| x as usize == t) {
-                println!("  {:>4} {:>8.4} {:>8.4} {:>8.4} {:>6.0}",
-                    t, avg_asks[i], min_asks[i], max_asks[i], n_asks[i]);
+                println!(
+                    "  {:>4} {:>8.4} {:>8.4} {:>8.4} {:>6.0}",
+                    t, avg_asks[i], min_asks[i], max_asks[i], n_asks[i]
+                );
             }
         }
     } else {
@@ -2225,30 +2540,46 @@ fn run_convergence_investigation(production_rate: f64) {
         let min_per = col_f64(&sub_by_tick, "min_per_worker");
         let recipients = col_f64(&sub_by_tick, "recipients");
 
-        println!("  {:>4} {:>6} {:>8} {:>8} {:>8}",
-            "tick", "recip", "total", "avg/wkr", "min/wkr");
+        println!(
+            "  {:>4} {:>6} {:>8} {:>8} {:>8}",
+            "tick", "recip", "total", "avg/wkr", "min/wkr"
+        );
         for t in 0..30usize {
             if let Some(i) = sub_ticks.iter().position(|&x| x as usize == t) {
-                println!("  {:>4} {:>6.0} {:>8.3} {:>8.4} {:>8.4}",
-                    t, recipients[i], total_sub[i], avg_per[i], min_per[i]);
+                println!(
+                    "  {:>4} {:>6.0} {:>8.3} {:>8.4} {:>8.4}",
+                    t, recipients[i], total_sub[i], avg_per[i], min_per[i]
+                );
             }
         }
 
         // Phase averages
-        let phases = [(0, 20, "early"), (20, 50, "mid"), (50, 100, "mid2"), (100, 200, "late")];
+        let phases = [
+            (0, 20, "early"),
+            (20, 50, "mid"),
+            (50, 100, "mid2"),
+            (100, 200, "late"),
+        ];
         println!();
         for (start, end, label) in &phases {
-            let recs: Vec<f64> = sub_ticks.iter().zip(recipients.iter())
+            let recs: Vec<f64> = sub_ticks
+                .iter()
+                .zip(recipients.iter())
                 .filter(|&(&t, _)| t >= *start as f64 && t < *end as f64)
                 .map(|(_, &r)| r)
                 .collect();
-            let mins: Vec<f64> = sub_ticks.iter().zip(min_per.iter())
+            let mins: Vec<f64> = sub_ticks
+                .iter()
+                .zip(min_per.iter())
                 .filter(|&(&t, _)| t >= *start as f64 && t < *end as f64)
                 .map(|(_, &m)| m)
                 .collect();
             if !recs.is_empty() {
-                println!("  {label:>6} (t={start}-{end}): avg_recipients={:.1} avg_min_per_worker={:.4}",
-                    mean(&recs), mean(&mins));
+                println!(
+                    "  {label:>6} (t={start}-{end}): avg_recipients={:.1} avg_min_per_worker={:.4}",
+                    mean(&recs),
+                    mean(&mins)
+                );
             }
         }
     } else {
@@ -2257,8 +2588,10 @@ fn run_convergence_investigation(production_rate: f64) {
 
     // ── 4: Wage trajectory over full run ──
     println!("\n--- 4: WAGE + EMPLOYMENT TRAJECTORY (sampled) ---\n");
-    println!("  {:>4} {:>5} {:>5} {:>5} {:>8} {:>8} {:>8}",
-        "tick", "pops", "empl", "unemp", "avg_wage", "avg_sat", "deaths");
+    println!(
+        "  {:>4} {:>5} {:>5} {:>5} {:>8} {:>8} {:>8}",
+        "tick", "pops", "empl", "unemp", "avg_wage", "avg_sat", "deaths"
+    );
     for &t in &sample_ticks_full {
         let pi = pop_ticks.iter().position(|&x| x as usize == t);
         let ei = emp_ticks.iter().position(|&x| x as usize == t);
@@ -2267,8 +2600,10 @@ fn run_convergence_investigation(production_rate: f64) {
             let empl = ei.map(|i| emp_counts[i]).unwrap_or(0.0);
             let unemp = pops - empl;
             let wage = ei.map(|i| avg_wages[i]).unwrap_or(0.0);
-            println!("  {:>4} {:>5.0} {:>5.0} {:>5.0} {:>8.4} {:>8.4} {:>8.0}",
-                t, pops, empl, unemp, wage, avg_food_sats[pi], deaths_series[pi]);
+            println!(
+                "  {:>4} {:>5.0} {:>5.0} {:>5.0} {:>8.4} {:>8.4} {:>8.0}",
+                t, pops, empl, unemp, wage, avg_food_sats[pi], deaths_series[pi]
+            );
         }
     }
 
@@ -2293,12 +2628,16 @@ fn run_convergence_investigation(production_rate: f64) {
         let mvp = col_f64(&bid_trajectory, "avg_mvp");
         let actual_bid = col_f64(&bid_trajectory, "avg_actual_bid");
 
-        println!("  {:>4} {:>10} {:>10} {:>10}",
-            "tick", "adaptive", "actual_bid", "mvp");
+        println!(
+            "  {:>4} {:>10} {:>10} {:>10}",
+            "tick", "adaptive", "actual_bid", "mvp"
+        );
         for &t in &sample_ticks_full {
             if let Some(i) = bt.iter().position(|&x| x as usize == t) {
-                println!("  {:>4} {:>10.4} {:>10.4} {:>10.4}",
-                    t, adaptive[i], actual_bid[i], mvp[i]);
+                println!(
+                    "  {:>4} {:>10.4} {:>10.4} {:>10.4}",
+                    t, adaptive[i], actual_bid[i], mvp[i]
+                );
             }
         }
     }
@@ -2315,7 +2654,9 @@ fn run_convergence_investigation(production_rate: f64) {
             .agg([
                 col("wanted").sum().alias("total_wanted"),
                 col("filled").sum().alias("total_filled"),
-                col("profitable_unfilled").sum().alias("total_prof_unfilled"),
+                col("profitable_unfilled")
+                    .sum()
+                    .alias("total_prof_unfilled"),
                 col("marginal_mvp").mean().alias("avg_marginal_mvp"),
             ])
             .sort(["tick"], Default::default())
@@ -2327,12 +2668,16 @@ fn run_convergence_investigation(production_rate: f64) {
         let prof_unfilled = col_f64(&so_summary, "total_prof_unfilled");
         let marginal_mvp = col_f64(&so_summary, "avg_marginal_mvp");
 
-        println!("  {:>4} {:>6} {:>8} {:>12} {:>8}",
-            "tick", "wanted", "filled", "prof_unfill", "marg_mvp");
+        println!(
+            "  {:>4} {:>6} {:>8} {:>12} {:>8}",
+            "tick", "wanted", "filled", "prof_unfill", "marg_mvp"
+        );
         for &t in &sample_ticks_full {
             if let Some(i) = so_ticks.iter().position(|&x| x as usize == t) {
-                println!("  {:>4} {:>6.0} {:>8.0} {:>12.0} {:>8.4}",
-                    t, wanted[i], filled[i], prof_unfilled[i], marginal_mvp[i]);
+                println!(
+                    "  {:>4} {:>6.0} {:>8.0} {:>12.0} {:>8.4}",
+                    t, wanted[i], filled[i], prof_unfilled[i], marginal_mvp[i]
+                );
             }
         }
     } else {
@@ -2425,39 +2770,81 @@ fn run_convergence_investigation(production_rate: f64) {
         .collect()
         .unwrap();
 
-    println!("  {:>4} {:>6} {:>6} {:>6} {:>6} {:>6} {:>8} {:>8}",
-        "tick", "prod", "subs", "cons", "import", "export", "m_grain", "price");
+    println!(
+        "  {:>4} {:>6} {:>6} {:>6} {:>6} {:>6} {:>8} {:>8}",
+        "tick", "prod", "subs", "cons", "import", "export", "m_grain", "price"
+    );
     for &t in &sample_ticks_full {
-        let produced = prod_by_tick.as_ref().and_then(|df| {
-            let ticks = col_f64(df, "tick");
-            ticks.iter().position(|&x| x as usize == t).map(|i| col_f64(df, "produced")[i])
-        }).unwrap_or(0.0);
-        let subsistence_out = sub_total_by_tick.as_ref().and_then(|df| {
-            let ticks = col_f64(df, "tick");
-            ticks.iter().position(|&x| x as usize == t).map(|i| col_f64(df, "subsistence")[i])
-        }).unwrap_or(0.0);
+        let produced = prod_by_tick
+            .as_ref()
+            .and_then(|df| {
+                let ticks = col_f64(df, "tick");
+                ticks
+                    .iter()
+                    .position(|&x| x as usize == t)
+                    .map(|i| col_f64(df, "produced")[i])
+            })
+            .unwrap_or(0.0);
+        let subsistence_out = sub_total_by_tick
+            .as_ref()
+            .and_then(|df| {
+                let ticks = col_f64(df, "tick");
+                ticks
+                    .iter()
+                    .position(|&x| x as usize == t)
+                    .map(|i| col_f64(df, "subsistence")[i])
+            })
+            .unwrap_or(0.0);
         let consumed = {
             let ticks = col_f64(&cons_by_tick, "tick");
-            ticks.iter().position(|&x| x as usize == t).map(|i| col_f64(&cons_by_tick, "consumed")[i]).unwrap_or(0.0)
+            ticks
+                .iter()
+                .position(|&x| x as usize == t)
+                .map(|i| col_f64(&cons_by_tick, "consumed")[i])
+                .unwrap_or(0.0)
         };
-        let imported = ext_import_by_tick.as_ref().and_then(|df| {
-            let ticks = col_f64(df, "tick");
-            ticks.iter().position(|&x| x as usize == t).map(|i| col_f64(df, "imported")[i])
-        }).unwrap_or(0.0);
-        let exported = ext_export_by_tick.as_ref().and_then(|df| {
-            let ticks = col_f64(df, "tick");
-            ticks.iter().position(|&x| x as usize == t).map(|i| col_f64(df, "exported")[i])
-        }).unwrap_or(0.0);
-        let m_grain = merchant_stock_by_tick.as_ref().and_then(|df| {
-            let ticks = col_f64(df, "tick");
-            ticks.iter().position(|&x| x as usize == t).map(|i| col_f64(df, "merchant_grain")[i])
-        }).unwrap_or(0.0);
+        let imported = ext_import_by_tick
+            .as_ref()
+            .and_then(|df| {
+                let ticks = col_f64(df, "tick");
+                ticks
+                    .iter()
+                    .position(|&x| x as usize == t)
+                    .map(|i| col_f64(df, "imported")[i])
+            })
+            .unwrap_or(0.0);
+        let exported = ext_export_by_tick
+            .as_ref()
+            .and_then(|df| {
+                let ticks = col_f64(df, "tick");
+                ticks
+                    .iter()
+                    .position(|&x| x as usize == t)
+                    .map(|i| col_f64(df, "exported")[i])
+            })
+            .unwrap_or(0.0);
+        let m_grain = merchant_stock_by_tick
+            .as_ref()
+            .and_then(|df| {
+                let ticks = col_f64(df, "tick");
+                ticks
+                    .iter()
+                    .position(|&x| x as usize == t)
+                    .map(|i| col_f64(df, "merchant_grain")[i])
+            })
+            .unwrap_or(0.0);
         let price = {
             let ticks = col_f64(&price_by_tick, "tick");
-            ticks.iter().position(|&x| x as usize == t).map(|i| col_f64(&price_by_tick, "clearing_price")[i]).unwrap_or(0.0)
+            ticks
+                .iter()
+                .position(|&x| x as usize == t)
+                .map(|i| col_f64(&price_by_tick, "clearing_price")[i])
+                .unwrap_or(0.0)
         };
-        println!("  {:>4} {:>6.2} {:>6.2} {:>6.2} {:>6.2} {:>6.2} {:>8.2} {:>8.4}",
-            t, produced, subsistence_out, consumed, imported, exported, m_grain, price);
+        println!(
+            "  {:>4} {:>6.2} {:>6.2} {:>6.2} {:>6.2} {:>6.2} {:>8.2} {:>8.4}",
+            t, produced, subsistence_out, consumed, imported, exported, m_grain, price
+        );
     }
 
     // ── 8: Pop currency + merchant currency ──
@@ -2482,25 +2869,35 @@ fn run_convergence_investigation(production_rate: f64) {
     let final_empl = emp_counts.last().copied().unwrap_or(0.0);
     let total_deaths: f64 = deaths_series.iter().sum();
     let total_grows: f64 = grows_series.iter().sum();
-    println!("  Final: {:.0} pops, {:.0} employed, {:.0} unemployed",
-        final_pop, final_empl, final_pop - final_empl);
-    println!("  Total deaths: {:.0}, Total grows: {:.0}, Net: {:.0}",
-        total_deaths, total_grows, total_grows - total_deaths);
+    println!(
+        "  Final: {:.0} pops, {:.0} employed, {:.0} unemployed",
+        final_pop,
+        final_empl,
+        final_pop - final_empl
+    );
+    println!(
+        "  Total deaths: {:.0}, Total grows: {:.0}, Net: {:.0}",
+        total_deaths,
+        total_grows,
+        total_grows - total_deaths
+    );
     println!("{}", "=".repeat(80));
 }
 
 /// Linear regression slope (least squares) of y on x = 0,1,2,...
 fn lin_slope(y: &[f64]) -> f64 {
     let n = y.len() as f64;
-    if n < 2.0 { return 0.0; }
+    if n < 2.0 {
+        return 0.0;
+    }
     let x_mean = (n - 1.0) / 2.0;
     let y_mean = mean(y);
-    let num: f64 = y.iter().enumerate()
+    let num: f64 = y
+        .iter()
+        .enumerate()
         .map(|(i, &yi)| (i as f64 - x_mean) * (yi - y_mean))
         .sum();
-    let den: f64 = (0..y.len())
-        .map(|i| (i as f64 - x_mean).powi(2))
-        .sum();
+    let den: f64 = (0..y.len()).map(|i| (i as f64 - x_mean).powi(2)).sum();
     if den.abs() < 1e-12 { 0.0 } else { num / den }
 }
 
@@ -2535,7 +2932,9 @@ fn investigate_longrun_equilibrium() {
 
     let workers_per_facility = num_pops.div_ceil(num_facilities);
     for _ in 0..num_facilities {
-        let farm = world.add_facility(FacilityType::Farm, settlement, merchant).unwrap();
+        let farm = world
+            .add_facility(FacilityType::Farm, settlement, merchant)
+            .unwrap();
         let f = world.get_facility_mut(farm).unwrap();
         f.capacity = workers_per_facility as u32;
         f.recipe_priorities = vec![RecipeId::new(1)];
@@ -2556,22 +2955,34 @@ fn investigate_longrun_equilibrium() {
     world.price_ema.insert((settlement, GRAIN), 1.0);
 
     let mut external = ExternalMarketConfig::default();
-    external.anchors.insert(GRAIN, AnchoredGoodConfig {
-        world_price: 10.0,
-        spread_bps: 500.0,
-        base_depth: 0.0,
-        depth_per_pop: 0.1,
-        tiers: 9,
-        tier_step_bps: 300.0,
-    });
-    external.frictions.insert(settlement, SettlementFriction {
-        enabled: true,
-        transport_bps: 9000.0,
-        tariff_bps: 0.0,
-        risk_bps: 0.0,
-    });
+    external.anchors.insert(
+        GRAIN,
+        AnchoredGoodConfig {
+            world_price: 10.0,
+            spread_bps: 500.0,
+            base_depth: 0.0,
+            depth_per_pop: 0.1,
+            tiers: 9,
+            tier_step_bps: 300.0,
+        },
+    );
+    external.frictions.insert(
+        settlement,
+        SettlementFriction {
+            enabled: true,
+            transport_bps: 9000.0,
+            tariff_bps: 0.0,
+            risk_bps: 0.0,
+        },
+    );
     world.set_external_market(external);
-    world.set_subsistence_reservation(SubsistenceReservationConfig::new(GRAIN, 1.5, num_pops / 2, 10.0, 0.10));
+    world.set_subsistence_reservation(SubsistenceReservationConfig::new(
+        GRAIN,
+        1.5,
+        num_pops / 2,
+        10.0,
+        0.10,
+    ));
 
     let recipes = vec![make_grain_recipe(production_rate)];
     let good_profiles = make_grain_profile();
@@ -2589,46 +3000,63 @@ fn investigate_longrun_equilibrium() {
     let fill = dfs.get("fill").expect("fill df");
 
     // Population per tick
-    let pop_by_tick = mortality.clone().lazy()
+    let pop_by_tick = mortality
+        .clone()
+        .lazy()
         .group_by([col("tick")])
         .agg([
             col("pop_id").count().alias("pop_count"),
-            col("outcome").eq(lit("dies")).cast(DataType::Int32).sum().alias("deaths"),
+            col("outcome")
+                .eq(lit("dies"))
+                .cast(DataType::Int32)
+                .sum()
+                .alias("deaths"),
         ])
         .sort(["tick"], Default::default())
-        .collect().unwrap();
+        .collect()
+        .unwrap();
 
     // Employment per tick
-    let emp_by_tick = assignment.clone().lazy()
+    let emp_by_tick = assignment
+        .clone()
+        .lazy()
         .group_by([col("tick")])
         .agg([col("pop_id").count().alias("employed")])
         .sort(["tick"], Default::default())
-        .collect().unwrap();
+        .collect()
+        .unwrap();
 
     // Price per tick (mean fill price as proxy for clearing price)
-    let price_by_tick = fill.clone().lazy()
+    let price_by_tick = fill
+        .clone()
+        .lazy()
         .group_by([col("tick")])
         .agg([col("price").mean().alias("price")])
         .sort(["tick"], Default::default())
-        .collect().unwrap();
+        .collect()
+        .unwrap();
 
     // Merchant grain per tick
     let merchant_grain_by_tick = dfs.get("stock_flow_good").map(|sfg| {
-        sfg.clone().lazy()
+        sfg.clone()
+            .lazy()
             .group_by([col("tick")])
             .agg([col("goods_after").sum().alias("m_grain")])
             .sort(["tick"], Default::default())
-            .collect().unwrap()
+            .collect()
+            .unwrap()
     });
 
     // External exports per tick
     let exports_by_tick = dfs.get("external_flow").map(|ef| {
-        ef.clone().lazy()
+        ef.clone()
+            .lazy()
             .filter(col("flow").eq(lit("export")))
             .group_by([col("tick")])
             .agg([col("quantity").sum().alias("exported")])
             .sort(["tick"], Default::default())
-            .collect().unwrap()
+            .collect()
+            .unwrap()
     });
 
     // Extract all tick-level vectors
@@ -2639,14 +3067,20 @@ fn investigate_longrun_equilibrium() {
     let emp_counts = col_f64(&emp_by_tick, "employed");
     let price_ticks = col_f64(&price_by_tick, "tick");
     let prices = col_f64(&price_by_tick, "price");
-    let m_grain_ticks = merchant_grain_by_tick.as_ref().map(|df| col_f64(df, "tick"));
-    let m_grain_vals = merchant_grain_by_tick.as_ref().map(|df| col_f64(df, "m_grain"));
+    let m_grain_ticks = merchant_grain_by_tick
+        .as_ref()
+        .map(|df| col_f64(df, "tick"));
+    let m_grain_vals = merchant_grain_by_tick
+        .as_ref()
+        .map(|df| col_f64(df, "m_grain"));
     let export_ticks = exports_by_tick.as_ref().map(|df| col_f64(df, "tick"));
     let export_vals = exports_by_tick.as_ref().map(|df| col_f64(df, "exported"));
 
     // Helper: extract values for ticks in [start, end)
     let window_vals = |ticks: &[f64], vals: &[f64], start: usize, end: usize| -> Vec<f64> {
-        ticks.iter().zip(vals.iter())
+        ticks
+            .iter()
+            .zip(vals.iter())
             .filter(|&(&t, _)| t >= start as f64 && t < end as f64)
             .map(|(_, &v)| v)
             .collect::<Vec<f64>>()
@@ -2654,7 +3088,9 @@ fn investigate_longrun_equilibrium() {
 
     // For employment: ticks with no assignments show up as missing. Fill with 0.
     let emp_for_tick = |t: usize| -> f64 {
-        emp_ticks.iter().position(|&x| x as usize == t)
+        emp_ticks
+            .iter()
+            .position(|&x| x as usize == t)
             .map(|i| emp_counts[i])
             .unwrap_or(0.0)
     };
@@ -2665,12 +3101,27 @@ fn investigate_longrun_equilibrium() {
     let n_windows = ticks / window_size;
 
     println!("\n{}", "=".repeat(90));
-    println!("=== LONG-RUN EQUILIBRIUM ANALYSIS: production_rate={production_rate}, {ticks} ticks ===");
+    println!(
+        "=== LONG-RUN EQUILIBRIUM ANALYSIS: production_rate={production_rate}, {ticks} ticks ==="
+    );
     println!("{}\n", "=".repeat(90));
 
-    println!("--- 1: WINDOWED STATISTICS ({}‐tick windows) ---\n", window_size);
-    println!("  {:>10} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}",
-        "window", "pop_μ", "pop_σ", "empl_μ", "empl_σ", "price_μ", "price_σ", "mgrain_μ", "export_μ");
+    println!(
+        "--- 1: WINDOWED STATISTICS ({}‐tick windows) ---\n",
+        window_size
+    );
+    println!(
+        "  {:>10} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}",
+        "window",
+        "pop_μ",
+        "pop_σ",
+        "empl_μ",
+        "empl_σ",
+        "price_μ",
+        "price_σ",
+        "mgrain_μ",
+        "export_μ"
+    );
 
     for w in 0..n_windows {
         let start = w * window_size + 1;
@@ -2679,19 +3130,30 @@ fn investigate_longrun_equilibrium() {
         let w_pop = window_vals(&pop_ticks, &pop_counts, start, end);
         let w_emp: Vec<f64> = (start..end).map(|t| emp_for_tick(t)).collect();
         let w_price = window_vals(&price_ticks, &prices, start, end);
-        let w_mgrain = m_grain_ticks.as_ref().zip(m_grain_vals.as_ref())
+        let w_mgrain = m_grain_ticks
+            .as_ref()
+            .zip(m_grain_vals.as_ref())
             .map(|(t, v)| window_vals(t, v, start, end))
             .unwrap_or_default();
-        let w_export = export_ticks.as_ref().zip(export_vals.as_ref())
+        let w_export = export_ticks
+            .as_ref()
+            .zip(export_vals.as_ref())
             .map(|(t, v)| window_vals(t, v, start, end))
             .unwrap_or_default();
 
-        println!("  {:>5}-{:<4} {:>8.1} {:>8.1} {:>8.1} {:>8.1} {:>8.4} {:>8.4} {:>8.1} {:>8.1}",
-            start, end - 1,
-            mean(&w_pop), std_dev(&w_pop),
-            mean(&w_emp), std_dev(&w_emp),
-            mean(&w_price), std_dev(&w_price),
-            mean(&w_mgrain), mean(&w_export));
+        println!(
+            "  {:>5}-{:<4} {:>8.1} {:>8.1} {:>8.1} {:>8.1} {:>8.4} {:>8.4} {:>8.1} {:>8.1}",
+            start,
+            end - 1,
+            mean(&w_pop),
+            std_dev(&w_pop),
+            mean(&w_emp),
+            std_dev(&w_emp),
+            mean(&w_price),
+            std_dev(&w_price),
+            mean(&w_mgrain),
+            mean(&w_export)
+        );
     }
 
     // === 2: CRASH EVENTS (employment = 0) ===
@@ -2701,7 +3163,10 @@ fn investigate_longrun_equilibrium() {
         let end = (w + 1) * window_size + 1;
         let crashes: usize = (start..end).filter(|&t| emp_for_tick(t) < 1.0).count();
         if crashes > 0 {
-            println!("  ticks {start}-{}: {crashes} ticks with zero employment", end - 1);
+            println!(
+                "  ticks {start}-{}: {crashes} ticks with zero employment",
+                end - 1
+            );
         }
     }
     let total_crashes: usize = (1..=ticks).filter(|&t| emp_for_tick(t) < 1.0).count();
@@ -2714,7 +3179,9 @@ fn investigate_longrun_equilibrium() {
     let late_prices = window_vals(&price_ticks, &prices, half, ticks + 1);
     let late_pop = window_vals(&pop_ticks, &pop_counts, half, ticks + 1);
     let late_emp: Vec<f64> = (half..=ticks).map(|t| emp_for_tick(t)).collect();
-    let late_mgrain = m_grain_ticks.as_ref().zip(m_grain_vals.as_ref())
+    let late_mgrain = m_grain_ticks
+        .as_ref()
+        .zip(m_grain_vals.as_ref())
         .map(|(t, v)| window_vals(t, v, half, ticks + 1))
         .unwrap_or_default();
 
@@ -2723,24 +3190,59 @@ fn investigate_longrun_equilibrium() {
     let emp_slope = lin_slope(&late_emp);
     let mgrain_slope = lin_slope(&late_mgrain);
 
-    println!("  Price:  mean={:.4}, std={:.4}, slope={:.6}/tick ({:.4}/1000 ticks)",
-        mean(&late_prices), std_dev(&late_prices), price_slope, price_slope * 1000.0);
-    println!("  Pop:    mean={:.1}, std={:.1}, slope={:.4}/tick ({:.2}/1000 ticks)",
-        mean(&late_pop), std_dev(&late_pop), pop_slope, pop_slope * 1000.0);
-    println!("  Employ: mean={:.1}, std={:.1}, slope={:.4}/tick ({:.2}/1000 ticks)",
-        mean(&late_emp), std_dev(&late_emp), emp_slope, emp_slope * 1000.0);
-    println!("  M_grain: mean={:.1}, std={:.1}, slope={:.4}/tick ({:.2}/1000 ticks)",
-        mean(&late_mgrain), std_dev(&late_mgrain), mgrain_slope, mgrain_slope * 1000.0);
+    println!(
+        "  Price:  mean={:.4}, std={:.4}, slope={:.6}/tick ({:.4}/1000 ticks)",
+        mean(&late_prices),
+        std_dev(&late_prices),
+        price_slope,
+        price_slope * 1000.0
+    );
+    println!(
+        "  Pop:    mean={:.1}, std={:.1}, slope={:.4}/tick ({:.2}/1000 ticks)",
+        mean(&late_pop),
+        std_dev(&late_pop),
+        pop_slope,
+        pop_slope * 1000.0
+    );
+    println!(
+        "  Employ: mean={:.1}, std={:.1}, slope={:.4}/tick ({:.2}/1000 ticks)",
+        mean(&late_emp),
+        std_dev(&late_emp),
+        emp_slope,
+        emp_slope * 1000.0
+    );
+    println!(
+        "  M_grain: mean={:.1}, std={:.1}, slope={:.4}/tick ({:.2}/1000 ticks)",
+        mean(&late_mgrain),
+        std_dev(&late_mgrain),
+        mgrain_slope,
+        mgrain_slope * 1000.0
+    );
 
     // === 4: PRICE DISTRIBUTION in last 2000 ticks ===
     let tail_prices = window_vals(&price_ticks, &prices, ticks - 2000, ticks + 1);
     let mut sorted_prices = tail_prices.clone();
     sorted_prices.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let p5 = sorted_prices.get(sorted_prices.len() / 20).copied().unwrap_or(0.0);
-    let p25 = sorted_prices.get(sorted_prices.len() / 4).copied().unwrap_or(0.0);
-    let p50 = sorted_prices.get(sorted_prices.len() / 2).copied().unwrap_or(0.0);
-    let p75 = sorted_prices.get(3 * sorted_prices.len() / 4).copied().unwrap_or(0.0);
-    let p95 = sorted_prices.get(19 * sorted_prices.len() / 20).copied().unwrap_or(0.0);
+    let p5 = sorted_prices
+        .get(sorted_prices.len() / 20)
+        .copied()
+        .unwrap_or(0.0);
+    let p25 = sorted_prices
+        .get(sorted_prices.len() / 4)
+        .copied()
+        .unwrap_or(0.0);
+    let p50 = sorted_prices
+        .get(sorted_prices.len() / 2)
+        .copied()
+        .unwrap_or(0.0);
+    let p75 = sorted_prices
+        .get(3 * sorted_prices.len() / 4)
+        .copied()
+        .unwrap_or(0.0);
+    let p95 = sorted_prices
+        .get(19 * sorted_prices.len() / 20)
+        .copied()
+        .unwrap_or(0.0);
 
     println!("\n--- 4: PRICE DISTRIBUTION (last 2000 ticks) ---\n");
     println!("  p5={p5:.4}  p25={p25:.4}  p50={p50:.4}  p75={p75:.4}  p95={p95:.4}");
@@ -2752,23 +3254,45 @@ fn investigate_longrun_equilibrium() {
     let mgrain_drift_per_1k = (mgrain_slope * 1000.0).abs();
     let pop_drift_per_1k = (pop_slope * 1000.0).abs();
 
-    if price_drift_per_1k < 0.01 && mgrain_drift_per_1k < 5.0 && pop_drift_per_1k < 1.0 && total_crashes == 0 {
+    if price_drift_per_1k < 0.01
+        && mgrain_drift_per_1k < 5.0
+        && pop_drift_per_1k < 1.0
+        && total_crashes == 0
+    {
         println!("  STABLE EQUILIBRIUM: all trends near zero, no crashes in last half");
     } else {
         if price_drift_per_1k >= 0.01 {
-            println!("  PRICE DRIFTING: {:.4}/1000 ticks (direction: {})",
+            println!(
+                "  PRICE DRIFTING: {:.4}/1000 ticks (direction: {})",
                 price_slope * 1000.0,
-                if price_slope < 0.0 { "deflating" } else { "inflating" });
+                if price_slope < 0.0 {
+                    "deflating"
+                } else {
+                    "inflating"
+                }
+            );
         }
         if mgrain_drift_per_1k >= 5.0 {
-            println!("  MERCHANT GRAIN {}: {:.1}/1000 ticks",
-                if mgrain_slope > 0.0 { "ACCUMULATING" } else { "DRAINING" },
-                mgrain_slope * 1000.0);
+            println!(
+                "  MERCHANT GRAIN {}: {:.1}/1000 ticks",
+                if mgrain_slope > 0.0 {
+                    "ACCUMULATING"
+                } else {
+                    "DRAINING"
+                },
+                mgrain_slope * 1000.0
+            );
         }
         if pop_drift_per_1k >= 1.0 {
-            println!("  POPULATION {}: {:.1}/1000 ticks",
-                if pop_slope > 0.0 { "GROWING" } else { "DECLINING" },
-                pop_slope * 1000.0);
+            println!(
+                "  POPULATION {}: {:.1}/1000 ticks",
+                if pop_slope > 0.0 {
+                    "GROWING"
+                } else {
+                    "DECLINING"
+                },
+                pop_slope * 1000.0
+            );
         }
         if total_crashes > 0 {
             let late_crashes: usize = (half..=ticks).filter(|&t| emp_for_tick(t) < 1.0).count();
@@ -2797,9 +3321,9 @@ fn investigate_backstop_subsistence_labor() {
     let (mut world, settlement) = create_world(
         num_pops,
         num_facilities,
-        1.0,    // initial_price
-        5.0,    // initial_pop_stock
-        210.0,  // initial_merchant_stock
+        1.0,   // initial_price
+        5.0,   // initial_pop_stock
+        210.0, // initial_merchant_stock
     );
 
     // Override: start unemployed with min_wage=0 (matching convergence tests)
@@ -2813,7 +3337,9 @@ fn investigate_backstop_subsistence_labor() {
 
     // Configure anchor + subsistence
     configure_anchor(&mut world, settlement, 0.10, 9000.0);
-    world.set_subsistence_reservation(SubsistenceReservationConfig::new(GRAIN, 1.0, 50, 10.0, 0.10));
+    world.set_subsistence_reservation(SubsistenceReservationConfig::new(
+        GRAIN, 1.0, 50, 10.0, 0.10,
+    ));
 
     let recipes = vec![common::make_grain_recipe(production_rate)];
     let good_profiles = common::make_grain_profile();
@@ -2832,13 +3358,19 @@ fn investigate_backstop_subsistence_labor() {
     println!("  Reservation wage = 1.0 * grain_price (subsistence is credible outside option)");
     println!("  Initial: merchant_currency=10000, pop_currency=100*100=10000\n");
 
-    let sample_ticks: Vec<usize> = (0..ticks).step_by(20).chain(std::iter::once(ticks - 1)).collect();
+    let sample_ticks: Vec<usize> = (0..ticks)
+        .step_by(20)
+        .chain(std::iter::once(ticks - 1))
+        .collect();
 
     // === 1. CURRENCY ACCOUNTING: where is the money? ===
     if let Some(stock_flow) = dfs.get("stock_flow") {
-        let sf = stock_flow.clone().lazy()
+        let sf = stock_flow
+            .clone()
+            .lazy()
             .sort(["tick"], Default::default())
-            .collect().unwrap();
+            .collect()
+            .unwrap();
 
         let ticks_v = col_f64(&sf, "tick");
         let m_cur_before = col_f64(&sf, "merchant_currency_before");
@@ -2849,14 +3381,18 @@ fn investigate_backstop_subsistence_labor() {
         let total_after = col_f64(&sf, "currency_after");
 
         println!("Currency positions (before → after each tick):");
-        println!("  {:>4} {:>10} {:>10} {:>10} {:>10} {:>10}",
-            "tick", "merch_cur", "pop_cur", "total_cur", "m_delta", "leak");
+        println!(
+            "  {:>4} {:>10} {:>10} {:>10} {:>10} {:>10}",
+            "tick", "merch_cur", "pop_cur", "total_cur", "m_delta", "leak"
+        );
         for &t in &sample_ticks {
             if let Some(i) = ticks_v.iter().position(|&x| x as usize == t) {
                 let m_delta = m_cur_after[i] - m_cur_before[i];
                 let leak = total_after[i] - total_before[i];
-                println!("  {:>4} {:>10.1} {:>10.1} {:>10.1} {:>10.2} {:>10.2}",
-                    t, m_cur_after[i], p_cur_after[i], total_after[i], m_delta, leak);
+                println!(
+                    "  {:>4} {:>10.1} {:>10.1} {:>10.1} {:>10.2} {:>10.2}",
+                    t, m_cur_after[i], p_cur_after[i], total_after[i], m_delta, leak
+                );
             }
         }
     } else {
@@ -2867,8 +3403,14 @@ fn investigate_backstop_subsistence_labor() {
     // Merchant sell revenue: fills where agent_type=merchant and side=sell
     // Merchant wage cost: sum of wages from assignment df
     if let (Some(fill_df), Some(assignment_df)) = (dfs.get("fill"), dfs.get("assignment")) {
-        let merchant_revenue = fill_df.clone().lazy()
-            .filter(col("agent_type").eq(lit("merchant")).and(col("side").eq(lit("sell"))))
+        let merchant_revenue = fill_df
+            .clone()
+            .lazy()
+            .filter(
+                col("agent_type")
+                    .eq(lit("merchant"))
+                    .and(col("side").eq(lit("sell"))),
+            )
             .with_column((col("quantity") * col("price")).alias("revenue"))
             .group_by([col("tick")])
             .agg([
@@ -2876,16 +3418,20 @@ fn investigate_backstop_subsistence_labor() {
                 col("quantity").sum().alias("grain_sold"),
             ])
             .sort(["tick"], Default::default())
-            .collect().unwrap();
+            .collect()
+            .unwrap();
 
-        let wage_cost = assignment_df.clone().lazy()
+        let wage_cost = assignment_df
+            .clone()
+            .lazy()
             .group_by([col("tick")])
             .agg([
                 col("wage").sum().alias("total_wages"),
                 col("pop_id").count().alias("employed"),
             ])
             .sort(["tick"], Default::default())
-            .collect().unwrap();
+            .collect()
+            .unwrap();
 
         let rev_ticks = col_f64(&merchant_revenue, "tick");
         let revenues = col_f64(&merchant_revenue, "sell_revenue");
@@ -2895,21 +3441,37 @@ fn investigate_backstop_subsistence_labor() {
         let employed = col_f64(&wage_cost, "employed");
 
         println!("\nMerchant P&L per tick (revenue from grain sales vs wage cost):");
-        println!("  {:>4} {:>8} {:>10} {:>10} {:>10} {:>8}",
-            "tick", "employed", "wages_out", "grain_rev", "net_P&L", "grain_sold");
+        println!(
+            "  {:>4} {:>8} {:>10} {:>10} {:>10} {:>8}",
+            "tick", "employed", "wages_out", "grain_rev", "net_P&L", "grain_sold"
+        );
         for &t in &sample_ticks {
-            let rev = rev_ticks.iter().position(|&x| x as usize == t)
-                .map(|i| (revenues[i], grain_sold[i])).unwrap_or((0.0, 0.0));
-            let wage = wage_ticks.iter().position(|&x| x as usize == t)
-                .map(|i| (wages[i], employed[i])).unwrap_or((0.0, 0.0));
+            let rev = rev_ticks
+                .iter()
+                .position(|&x| x as usize == t)
+                .map(|i| (revenues[i], grain_sold[i]))
+                .unwrap_or((0.0, 0.0));
+            let wage = wage_ticks
+                .iter()
+                .position(|&x| x as usize == t)
+                .map(|i| (wages[i], employed[i]))
+                .unwrap_or((0.0, 0.0));
             let net = rev.0 - wage.0;
-            println!("  {:>4} {:>8.0} {:>10.2} {:>10.2} {:>10.2} {:>8.1}",
-                t, wage.1, wage.0, rev.0, net, rev.1);
+            println!(
+                "  {:>4} {:>8.0} {:>10.2} {:>10.2} {:>10.2} {:>8.1}",
+                t, wage.1, wage.0, rev.0, net, rev.1
+            );
         }
 
         // Also check: is the merchant BUYING grain? (import cost)
-        let merchant_buys = fill_df.clone().lazy()
-            .filter(col("agent_type").eq(lit("merchant")).and(col("side").eq(lit("buy"))))
+        let merchant_buys = fill_df
+            .clone()
+            .lazy()
+            .filter(
+                col("agent_type")
+                    .eq(lit("merchant"))
+                    .and(col("side").eq(lit("buy"))),
+            )
             .with_column((col("quantity") * col("price")).alias("cost"))
             .group_by([col("tick")])
             .agg([
@@ -2917,19 +3479,21 @@ fn investigate_backstop_subsistence_labor() {
                 col("quantity").sum().alias("grain_bought"),
             ])
             .sort(["tick"], Default::default())
-            .collect().unwrap();
+            .collect()
+            .unwrap();
 
         if merchant_buys.height() > 0 {
             let buy_ticks = col_f64(&merchant_buys, "tick");
             let buy_costs = col_f64(&merchant_buys, "buy_cost");
             let grain_bought = col_f64(&merchant_buys, "grain_bought");
             println!("\nMerchant BUY orders (grain purchases from market):");
-            println!("  {:>4} {:>10} {:>10}",
-                "tick", "grain_bought", "cost");
+            println!("  {:>4} {:>10} {:>10}", "tick", "grain_bought", "cost");
             for &t in &sample_ticks {
                 if let Some(i) = buy_ticks.iter().position(|&x| x as usize == t) {
-                    println!("  {:>4} {:>10.2} {:>10.2}",
-                        t, grain_bought[i], buy_costs[i]);
+                    println!(
+                        "  {:>4} {:>10.2} {:>10.2}",
+                        t, grain_bought[i], buy_costs[i]
+                    );
                 }
             }
         } else {
@@ -2939,39 +3503,50 @@ fn investigate_backstop_subsistence_labor() {
 
     // === 3. EXTERNAL FLOWS: where is currency leaving the settlement? ===
     if let Some(ext_flow) = dfs.get("external_flow") {
-        let imports = ext_flow.clone().lazy()
+        let imports = ext_flow
+            .clone()
+            .lazy()
             .filter(col("flow").eq(lit("import")))
             .group_by([col("tick")])
-            .agg([
-                col("quantity").sum().alias("import_qty"),
-            ])
+            .agg([col("quantity").sum().alias("import_qty")])
             .sort(["tick"], Default::default())
-            .collect().unwrap();
+            .collect()
+            .unwrap();
 
-        let exports = ext_flow.clone().lazy()
+        let exports = ext_flow
+            .clone()
+            .lazy()
             .filter(col("flow").eq(lit("export")))
             .group_by([col("tick")])
-            .agg([
-                col("quantity").sum().alias("export_qty"),
-            ])
+            .agg([col("quantity").sum().alias("export_qty")])
             .sort(["tick"], Default::default())
-            .collect().unwrap();
+            .collect()
+            .unwrap();
 
         let imp_ticks = col_f64(&imports, "tick");
         let imp_qty = col_f64(&imports, "import_qty");
         let exp_ticks = col_f64(&exports, "tick");
         let exp_qty = col_f64(&exports, "export_qty");
 
-        println!("\nExternal flows (imports bring grain in + currency out; exports send grain out + currency in):");
-        println!("  {:>4} {:>10} {:>10} {:>10}",
-            "tick", "import_qty", "export_qty", "net_import");
+        println!(
+            "\nExternal flows (imports bring grain in + currency out; exports send grain out + currency in):"
+        );
+        println!(
+            "  {:>4} {:>10} {:>10} {:>10}",
+            "tick", "import_qty", "export_qty", "net_import"
+        );
         for &t in &sample_ticks {
-            let imp = imp_ticks.iter().position(|&x| x as usize == t)
-                .map(|i| imp_qty[i]).unwrap_or(0.0);
-            let exp = exp_ticks.iter().position(|&x| x as usize == t)
-                .map(|i| exp_qty[i]).unwrap_or(0.0);
-            println!("  {:>4} {:>10.3} {:>10.3} {:>10.3}",
-                t, imp, exp, imp - exp);
+            let imp = imp_ticks
+                .iter()
+                .position(|&x| x as usize == t)
+                .map(|i| imp_qty[i])
+                .unwrap_or(0.0);
+            let exp = exp_ticks
+                .iter()
+                .position(|&x| x as usize == t)
+                .map(|i| exp_qty[i])
+                .unwrap_or(0.0);
+            println!("  {:>4} {:>10.3} {:>10.3} {:>10.3}", t, imp, exp, imp - exp);
         }
     } else {
         println!("\n  No external_flow dataframe");
@@ -2979,17 +3554,26 @@ fn investigate_backstop_subsistence_labor() {
 
     // === 4. MORTALITY + POPULATION (compact) ===
     if let Some(mortality) = dfs.get("mortality") {
-        let mort_by_tick = mortality.clone().lazy()
+        let mort_by_tick = mortality
+            .clone()
+            .lazy()
             .group_by([col("tick")])
             .agg([
                 col("pop_id").count().alias("total"),
-                col("outcome").filter(col("outcome").eq(lit("dies"))).count().alias("deaths"),
-                col("outcome").filter(col("outcome").eq(lit("grows"))).count().alias("births"),
+                col("outcome")
+                    .filter(col("outcome").eq(lit("dies")))
+                    .count()
+                    .alias("deaths"),
+                col("outcome")
+                    .filter(col("outcome").eq(lit("grows")))
+                    .count()
+                    .alias("births"),
                 col("food_satisfaction").mean().alias("avg_sat"),
                 col("food_satisfaction").min().alias("min_sat"),
             ])
             .sort(["tick"], Default::default())
-            .collect().unwrap();
+            .collect()
+            .unwrap();
 
         let mort_ticks = col_f64(&mort_by_tick, "tick");
         let totals = col_f64(&mort_by_tick, "total");
@@ -2999,12 +3583,16 @@ fn investigate_backstop_subsistence_labor() {
         let min_sats = col_f64(&mort_by_tick, "min_sat");
 
         println!("\nPopulation & Mortality:");
-        println!("  {:>4} {:>6} {:>6} {:>6} {:>8} {:>8}",
-            "tick", "pops", "deaths", "births", "avg_sat", "min_sat");
+        println!(
+            "  {:>4} {:>6} {:>6} {:>6} {:>8} {:>8}",
+            "tick", "pops", "deaths", "births", "avg_sat", "min_sat"
+        );
         for &t in &sample_ticks {
             if let Some(i) = mort_ticks.iter().position(|&x| x as usize == t) {
-                println!("  {:>4} {:>6.0} {:>6.0} {:>6.0} {:>8.3} {:>8.3}",
-                    t, totals[i], deaths[i], births[i], avg_sats[i], min_sats[i]);
+                println!(
+                    "  {:>4} {:>6.0} {:>6.0} {:>6.0} {:>8.3} {:>8.3}",
+                    t, totals[i], deaths[i], births[i], avg_sats[i], min_sats[i]
+                );
             }
         }
     }
@@ -3018,8 +3606,8 @@ fn investigate_backstop_subsistence_labor() {
 #[test]
 #[ignore = "investigation workflow; run manually to calibrate convergence bounds"]
 fn investigate_convergence_scenarios() {
-    use sim_core::instrument;
     use sim_core::SubsistenceReservationConfig;
+    use sim_core::instrument;
     use sim_core::{AnchoredGoodConfig, SettlementFriction};
 
     struct ConvergenceScenario {
@@ -3051,7 +3639,8 @@ fn investigate_convergence_scenarios() {
             let m = world.get_merchant_mut(merchant).unwrap();
             m.currency = 10000.0;
             if initial_merchant_stock > 0.0 {
-                m.stockpile_at(settlement).add(GRAIN, initial_merchant_stock);
+                m.stockpile_at(settlement)
+                    .add(GRAIN, initial_merchant_stock);
             }
         }
 
@@ -3059,7 +3648,11 @@ fn investigate_convergence_scenarios() {
         let mut facility_ids = Vec::new();
         for _ in 0..num_facilities {
             let farm = world
-                .add_facility(sim_core::production::FacilityType::Farm, settlement, merchant)
+                .add_facility(
+                    sim_core::production::FacilityType::Farm,
+                    settlement,
+                    merchant,
+                )
                 .unwrap();
             let f = world.get_facility_mut(farm).unwrap();
             f.capacity = workers_per_facility as u32;
@@ -3120,59 +3713,99 @@ fn investigate_convergence_scenarios() {
     let scenarios = [
         ConvergenceScenario {
             name: "basic",
-            num_pops: 100, num_facilities: 2,
-            production_rate: 1.05, initial_price: 1.0,
-            initial_pop_stock: 5.0, initial_merchant_stock: 210.0,
-            ticks: 600, tail_window: 200, q_max: 1.0,
+            num_pops: 100,
+            num_facilities: 2,
+            production_rate: 1.05,
+            initial_price: 1.0,
+            initial_pop_stock: 5.0,
+            initial_merchant_stock: 210.0,
+            ticks: 600,
+            tail_window: 200,
+            q_max: 1.0,
         },
         ConvergenceScenario {
             name: "sweep_balanced",
-            num_pops: 100, num_facilities: 2,
-            production_rate: 1.05, initial_price: 1.0,
-            initial_pop_stock: 5.0, initial_merchant_stock: 200.0,
-            ticks: 600, tail_window: 200, q_max: 1.0,
+            num_pops: 100,
+            num_facilities: 2,
+            production_rate: 1.05,
+            initial_price: 1.0,
+            initial_pop_stock: 5.0,
+            initial_merchant_stock: 200.0,
+            ticks: 600,
+            tail_window: 200,
+            q_max: 1.0,
         },
         ConvergenceScenario {
             name: "sweep_empty_merchant",
-            num_pops: 100, num_facilities: 2,
-            production_rate: 1.05, initial_price: 0.6,
-            initial_pop_stock: 5.0, initial_merchant_stock: 0.0,
-            ticks: 600, tail_window: 200, q_max: 1.0,
+            num_pops: 100,
+            num_facilities: 2,
+            production_rate: 1.05,
+            initial_price: 0.6,
+            initial_pop_stock: 5.0,
+            initial_merchant_stock: 0.0,
+            ticks: 600,
+            tail_window: 200,
+            q_max: 1.0,
         },
         ConvergenceScenario {
             name: "sweep_high_price",
-            num_pops: 100, num_facilities: 2,
-            production_rate: 1.05, initial_price: 1.4,
-            initial_pop_stock: 4.0, initial_merchant_stock: 120.0,
-            ticks: 600, tail_window: 200, q_max: 1.0,
+            num_pops: 100,
+            num_facilities: 2,
+            production_rate: 1.05,
+            initial_price: 1.4,
+            initial_pop_stock: 4.0,
+            initial_merchant_stock: 120.0,
+            ticks: 600,
+            tail_window: 200,
+            q_max: 1.0,
         },
         ConvergenceScenario {
             name: "pop_sensitivity_50",
-            num_pops: 50, num_facilities: 1,
-            production_rate: 1.05, initial_price: 1.0,
-            initial_pop_stock: 5.0, initial_merchant_stock: 105.0,
-            ticks: 600, tail_window: 200, q_max: 1.0,
+            num_pops: 50,
+            num_facilities: 1,
+            production_rate: 1.05,
+            initial_price: 1.0,
+            initial_pop_stock: 5.0,
+            initial_merchant_stock: 105.0,
+            ticks: 600,
+            tail_window: 200,
+            q_max: 1.0,
         },
         ConvergenceScenario {
             name: "pop_sensitivity_200",
-            num_pops: 200, num_facilities: 4,
-            production_rate: 1.05, initial_price: 1.0,
-            initial_pop_stock: 5.0, initial_merchant_stock: 420.0,
-            ticks: 600, tail_window: 200, q_max: 1.0,
+            num_pops: 200,
+            num_facilities: 4,
+            production_rate: 1.05,
+            initial_price: 1.0,
+            initial_pop_stock: 5.0,
+            initial_merchant_stock: 420.0,
+            ticks: 600,
+            tail_window: 200,
+            q_max: 1.0,
         },
         ConvergenceScenario {
             name: "mortality_feedback",
-            num_pops: 100, num_facilities: 2,
-            production_rate: 1.05, initial_price: 3.0,
-            initial_pop_stock: 1.0, initial_merchant_stock: 10.0,
-            ticks: 600, tail_window: 200, q_max: 1.0,
+            num_pops: 100,
+            num_facilities: 2,
+            production_rate: 1.05,
+            initial_price: 3.0,
+            initial_pop_stock: 1.0,
+            initial_merchant_stock: 10.0,
+            ticks: 600,
+            tail_window: 200,
+            q_max: 1.0,
         },
         ConvergenceScenario {
             name: "calibration_chosen",
-            num_pops: 100, num_facilities: 2,
-            production_rate: 1.0, initial_price: 1.0,
-            initial_pop_stock: 5.0, initial_merchant_stock: 210.0,
-            ticks: 220, tail_window: 40, q_max: 1.0,
+            num_pops: 100,
+            num_facilities: 2,
+            production_rate: 1.0,
+            initial_price: 1.0,
+            initial_pop_stock: 5.0,
+            initial_merchant_stock: 210.0,
+            ticks: 220,
+            tail_window: 40,
+            q_max: 1.0,
         },
     ];
 
@@ -3208,10 +3841,17 @@ fn investigate_convergence_scenarios() {
         let dfs = instrument::drain_to_dataframes();
 
         println!("--- {} ---", scenario.name);
-        println!("  Setup: {} pops, {} fac, prod={}, price0={}, pop_stk={}, merc_stk={}, ticks={}, q_max={}",
-            scenario.num_pops, scenario.num_facilities, scenario.production_rate,
-            scenario.initial_price, scenario.initial_pop_stock, scenario.initial_merchant_stock,
-            scenario.ticks, scenario.q_max);
+        println!(
+            "  Setup: {} pops, {} fac, prod={}, price0={}, pop_stk={}, merc_stk={}, ticks={}, q_max={}",
+            scenario.num_pops,
+            scenario.num_facilities,
+            scenario.production_rate,
+            scenario.initial_price,
+            scenario.initial_pop_stock,
+            scenario.initial_merchant_stock,
+            scenario.ticks,
+            scenario.q_max
+        );
 
         // -- Price per tick --
         let price_stats = if let Some(fill) = dfs.get("fill") {
@@ -3247,43 +3887,74 @@ fn investigate_convergence_scenarios() {
         };
 
         // -- Population per tick (from mortality df) --
-        let (pop_stats, total_deaths, total_grows, early_deaths) = if let Some(mortality) = dfs.get("mortality") {
-            let pop_by_tick = mortality
-                .clone()
-                .lazy()
-                .group_by([col("tick")])
-                .agg([col("pop_id").n_unique().alias("pop_count")])
-                .sort(["tick"], Default::default())
-                .collect()
-                .unwrap();
-            let pop_series = col_f64(&pop_by_tick, "pop_count");
-            let ps = compute_tail_stats(&pop_series, scenario.tail_window);
+        let (pop_stats, total_deaths, total_grows, early_deaths) =
+            if let Some(mortality) = dfs.get("mortality") {
+                let pop_by_tick = mortality
+                    .clone()
+                    .lazy()
+                    .group_by([col("tick")])
+                    .agg([col("pop_id").n_unique().alias("pop_count")])
+                    .sort(["tick"], Default::default())
+                    .collect()
+                    .unwrap();
+                let pop_series = col_f64(&pop_by_tick, "pop_count");
+                let ps = compute_tail_stats(&pop_series, scenario.tail_window);
 
-            let totals = mortality
-                .clone()
-                .lazy()
-                .select([
-                    col("outcome").eq(lit("dies")).cast(DataType::Int32).sum().alias("deaths"),
-                    col("outcome").eq(lit("grows")).cast(DataType::Int32).sum().alias("grows"),
-                ])
-                .collect()
-                .unwrap();
-            let deaths = totals.column("deaths").unwrap().i32().unwrap().get(0).unwrap_or(0) as usize;
-            let grows = totals.column("grows").unwrap().i32().unwrap().get(0).unwrap_or(0) as usize;
+                let totals = mortality
+                    .clone()
+                    .lazy()
+                    .select([
+                        col("outcome")
+                            .eq(lit("dies"))
+                            .cast(DataType::Int32)
+                            .sum()
+                            .alias("deaths"),
+                        col("outcome")
+                            .eq(lit("grows"))
+                            .cast(DataType::Int32)
+                            .sum()
+                            .alias("grows"),
+                    ])
+                    .collect()
+                    .unwrap();
+                let deaths = totals
+                    .column("deaths")
+                    .unwrap()
+                    .i32()
+                    .unwrap()
+                    .get(0)
+                    .unwrap_or(0) as usize;
+                let grows = totals
+                    .column("grows")
+                    .unwrap()
+                    .i32()
+                    .unwrap()
+                    .get(0)
+                    .unwrap_or(0) as usize;
 
-            let early = mortality
-                .clone()
-                .lazy()
-                .filter(col("tick").lt(lit(50u64)).and(col("outcome").eq(lit("dies"))))
-                .select([col("pop_id").count().alias("n")])
-                .collect()
-                .unwrap();
-            let early_d = early.column("n").unwrap().u32().unwrap().get(0).unwrap_or(0) as usize;
+                let early = mortality
+                    .clone()
+                    .lazy()
+                    .filter(
+                        col("tick")
+                            .lt(lit(50u64))
+                            .and(col("outcome").eq(lit("dies"))),
+                    )
+                    .select([col("pop_id").count().alias("n")])
+                    .collect()
+                    .unwrap();
+                let early_d = early
+                    .column("n")
+                    .unwrap()
+                    .u32()
+                    .unwrap()
+                    .get(0)
+                    .unwrap_or(0) as usize;
 
-            (Some(ps), deaths, grows, early_d)
-        } else {
-            (None, 0, 0, 0)
-        };
+                (Some(ps), deaths, grows, early_d)
+            } else {
+                (None, 0, 0, 0)
+            };
 
         // -- Food satisfaction per tick --
         let food_sat_stats = if let Some(mortality) = dfs.get("mortality") {
@@ -3303,7 +3974,9 @@ fn investigate_convergence_scenarios() {
 
         // -- Employment rate --
         let emp_rate_stats = if let (Some(_), Some(_)) = (&pop_stats, &emp_stats) {
-            if let (Some(mortality), Some(assignment)) = (dfs.get("mortality"), dfs.get("assignment")) {
+            if let (Some(mortality), Some(assignment)) =
+                (dfs.get("mortality"), dfs.get("assignment"))
+            {
                 let pop_by_tick = mortality
                     .clone()
                     .lazy()
@@ -3322,11 +3995,17 @@ fn investigate_convergence_scenarios() {
                     .unwrap();
                 let merged = pop_by_tick
                     .lazy()
-                    .join(emp_by_tick.lazy(), [col("tick")], [col("tick")], JoinArgs::new(JoinType::Left))
+                    .join(
+                        emp_by_tick.lazy(),
+                        [col("tick")],
+                        [col("tick")],
+                        JoinArgs::new(JoinType::Left),
+                    )
                     .with_column(col("employed").fill_null(lit(0u32)))
                     .with_column(
-                        (col("employed").cast(DataType::Float64) / col("pop_count").cast(DataType::Float64))
-                            .alias("emp_rate"),
+                        (col("employed").cast(DataType::Float64)
+                            / col("pop_count").cast(DataType::Float64))
+                        .alias("emp_rate"),
                     )
                     .sort(["tick"], Default::default())
                     .collect()
@@ -3353,7 +4032,10 @@ fn investigate_convergence_scenarios() {
         if let Some(fs) = &food_sat_stats {
             println!("  FoodSat:  {}", fs);
         }
-        println!("  Deaths: total={}, early(<50)={}, Grows: total={}", total_deaths, early_deaths, total_grows);
+        println!(
+            "  Deaths: total={}, early(<50)={}, Grows: total={}",
+            total_deaths, early_deaths, total_grows
+        );
         println!();
     }
 }

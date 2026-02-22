@@ -5,7 +5,9 @@ use crate::consumption;
 use crate::external::{
     ExternalMarketConfig, OutsideAgentRole, OutsideFlowTotals, generate_outside_market_orders,
 };
-use crate::labor::{SubsistenceReservationConfig, ordered_subsistence_yields, ranked_subsistence_yields};
+use crate::labor::{
+    SubsistenceReservationConfig, ordered_subsistence_yields, ranked_subsistence_yields,
+};
 use crate::market::{self, Order, Side};
 use crate::needs::Need;
 use crate::types::{AgentId, GoodId, GoodProfile, PopId, Price, SettlementId};
@@ -376,7 +378,8 @@ pub fn run_settlement_tick(
     }
 
     // Inject outside market ladders (if enabled for this settlement)
-    let outside_market = generate_outside_market_orders(settlement, pops.len(), external_market, depth_multipliers);
+    let outside_market =
+        generate_outside_market_orders(settlement, pops.len(), external_market, depth_multipliers);
     for mut order in outside_market.orders {
         order.id = next_order_id;
         next_order_id += 1;
