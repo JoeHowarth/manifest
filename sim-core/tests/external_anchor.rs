@@ -7,8 +7,12 @@ use std::collections::HashMap;
 use sim_core::tick::PRICE_EMA_ALPHA;
 use sim_core::{
     AnchoredGoodConfig, ExternalMarketConfig, GoodId, GoodProfile, Need, OutsideFlowTotals, Pop,
-    PopId, Price, SettlementFriction, SettlementId, run_settlement_tick,
+    PopKey, Price, SettlementFriction, SettlementId, pop_key_from_u64, run_settlement_tick,
 };
+
+fn pk(id: u64) -> PopKey {
+    pop_key_from_u64(id)
+}
 
 fn make_anchor_config(
     settlement: SettlementId,
@@ -58,13 +62,13 @@ fn price_ceiling_with_import_anchor() {
     let mut price_ema: HashMap<GoodId, Price> = HashMap::new();
     price_ema.insert(GRAIN, 20.0);
 
-    let mut buyer = Pop::new(PopId::new(1), settlement);
+    let mut buyer = Pop::new();
     buyer.currency = 50_000.0;
     buyer.income_ema = 50_000.0;
     buyer.stocks.insert(GRAIN, 0.0);
     buyer.desired_consumption_ema.insert(GRAIN, 25.0);
 
-    let mut pops: Vec<&mut Pop> = vec![&mut buyer];
+    let mut pops: Vec<(PopKey, &mut Pop)> = vec![(pk(1), &mut buyer)];
     let mut merchants = Vec::new();
     let mut flows = OutsideFlowTotals::default();
 
@@ -114,13 +118,13 @@ fn price_floor_with_export_anchor() {
     let mut price_ema: HashMap<GoodId, Price> = HashMap::new();
     price_ema.insert(GRAIN, 10.0);
 
-    let mut seller = Pop::new(PopId::new(1), settlement);
+    let mut seller = Pop::new();
     seller.currency = 0.0;
     seller.income_ema = 0.0;
     seller.stocks.insert(GRAIN, 100.0);
     seller.desired_consumption_ema.insert(GRAIN, 0.1);
 
-    let mut pops: Vec<&mut Pop> = vec![&mut seller];
+    let mut pops: Vec<(PopKey, &mut Pop)> = vec![(pk(1), &mut seller)];
     let mut merchants = Vec::new();
     let mut flows = OutsideFlowTotals::default();
 
@@ -171,13 +175,13 @@ fn outside_depth_is_respected() {
     let mut price_ema: HashMap<GoodId, Price> = HashMap::new();
     price_ema.insert(GRAIN, 25.0);
 
-    let mut buyer = Pop::new(PopId::new(1), settlement);
+    let mut buyer = Pop::new();
     buyer.currency = 100_000.0;
     buyer.income_ema = 100_000.0;
     buyer.stocks.insert(GRAIN, 0.0);
     buyer.desired_consumption_ema.insert(GRAIN, 100.0);
 
-    let mut pops: Vec<&mut Pop> = vec![&mut buyer];
+    let mut pops: Vec<(PopKey, &mut Pop)> = vec![(pk(1), &mut buyer)];
     let mut merchants = Vec::new();
     let mut flows = OutsideFlowTotals::default();
 
@@ -216,13 +220,13 @@ fn no_external_flow_when_disabled() {
     let mut price_ema: HashMap<GoodId, Price> = HashMap::new();
     price_ema.insert(GRAIN, 20.0);
 
-    let mut buyer = Pop::new(PopId::new(1), settlement);
+    let mut buyer = Pop::new();
     buyer.currency = 50_000.0;
     buyer.income_ema = 50_000.0;
     buyer.stocks.insert(GRAIN, 0.0);
     buyer.desired_consumption_ema.insert(GRAIN, 25.0);
 
-    let mut pops: Vec<&mut Pop> = vec![&mut buyer];
+    let mut pops: Vec<(PopKey, &mut Pop)> = vec![(pk(1), &mut buyer)];
     let mut merchants = Vec::new();
     let mut flows = OutsideFlowTotals::default();
 
@@ -266,13 +270,13 @@ fn external_anchor_influences_price_ema_but_local_clear_dominates() {
     let mut price_ema: HashMap<GoodId, Price> = HashMap::new();
     price_ema.insert(GRAIN, initial_ema);
 
-    let mut buyer = Pop::new(PopId::new(1), settlement);
+    let mut buyer = Pop::new();
     buyer.currency = 50_000.0;
     buyer.income_ema = 50_000.0;
     buyer.stocks.insert(GRAIN, 0.0);
     buyer.desired_consumption_ema.insert(GRAIN, 25.0);
 
-    let mut pops: Vec<&mut Pop> = vec![&mut buyer];
+    let mut pops: Vec<(PopKey, &mut Pop)> = vec![(pk(1), &mut buyer)];
     let mut merchants = Vec::new();
 
     let result = run_settlement_tick(
@@ -325,13 +329,13 @@ fn anchored_no_trade_tick_still_moves_ema_toward_world() {
     let mut price_ema: HashMap<GoodId, Price> = HashMap::new();
     price_ema.insert(GRAIN, initial_ema);
 
-    let mut idle_pop = Pop::new(PopId::new(1), settlement);
+    let mut idle_pop = Pop::new();
     idle_pop.currency = 0.0;
     idle_pop.income_ema = 0.0;
     idle_pop.stocks.insert(GRAIN, 0.0);
     idle_pop.desired_consumption_ema.insert(GRAIN, 0.0);
 
-    let mut pops: Vec<&mut Pop> = vec![&mut idle_pop];
+    let mut pops: Vec<(PopKey, &mut Pop)> = vec![(pk(1), &mut idle_pop)];
     let mut merchants = Vec::new();
 
     let result = run_settlement_tick(

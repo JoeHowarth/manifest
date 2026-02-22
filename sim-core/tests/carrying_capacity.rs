@@ -69,7 +69,7 @@ fn run_subsistence_only_trial(initial_pop: usize, ticks: usize) -> Vec<f64> {
         let pop_id = world
             .add_pop(settlement)
             .expect("pop insertion should succeed");
-        let pop = world.get_pop_mut(pop_id).expect("pop must exist");
+        let pop = world.pop_mut(pop_id).expect("pop must exist");
         pop.currency = 0.0;
         pop.income_ema = 0.0;
         pop.stocks.insert(GRAIN, 1.0);
@@ -101,7 +101,8 @@ fn run_subsistence_only_trial(initial_pop: usize, ticks: usize) -> Vec<f64> {
     let mut pop_history = Vec::with_capacity(ticks);
     for _ in 0..ticks {
         world.run_tick(&good_profiles, &needs, &recipes);
-        pop_history.push(world.pops.len() as f64);
+        let pop_count: usize = world.settlements.values().map(|s| s.pops.len()).sum();
+        pop_history.push(pop_count as f64);
     }
 
     pop_history

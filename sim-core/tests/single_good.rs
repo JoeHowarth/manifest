@@ -137,7 +137,7 @@ fn create_world(s: &Scenario) -> World {
         let farm = world
             .add_facility(FacilityType::Farm, settlement, merchant)
             .unwrap();
-        let f = world.get_facility_mut(farm).unwrap();
+        let f = world.facility_mut(farm).unwrap();
         f.capacity = s.slots_per_facility as u32;
         f.recipe_priorities = vec![RecipeId::new(1)];
         facility_ids.push(farm);
@@ -146,7 +146,7 @@ fn create_world(s: &Scenario) -> World {
     // Pops — start unemployed so the labor market clears naturally.
     for _ in 0..s.num_pops {
         let pop = world.add_pop(settlement).unwrap();
-        let p = world.get_pop_mut(pop).unwrap();
+        let p = world.pop_mut(pop).unwrap();
         p.currency = 100.0;
         p.skills.insert(LABORER);
         p.min_wage = 0.0;
@@ -156,8 +156,9 @@ fn create_world(s: &Scenario) -> World {
     }
 
     // Labor / price EMAs
-    world.wage_ema.insert(LABORER, 1.0);
-    world.price_ema.insert((settlement, GRAIN), s.initial_price);
+    let ss = world.settlements.get_mut(&settlement).unwrap();
+    ss.wage_ema.insert(LABORER, 1.0);
+    ss.price_ema.insert(GRAIN, s.initial_price);
 
     // External market (gentle anchor around world_grain_price)
     let mut external = ExternalMarketConfig::default();
@@ -215,12 +216,12 @@ fn run_scenario_named(s: &Scenario, name: &str) -> SimResult {
 
     for _ in 0..s.ticks {
         world.run_tick(&good_profiles, &needs, &recipes);
-        if world.pops.is_empty() {
+        if world.settlements.values().all(|s| s.pops.is_empty()) {
             break;
         }
     }
 
-    let final_pop_count = world.pops.len();
+    let final_pop_count: usize = world.settlements.values().map(|s| s.pops.len()).sum();
     let extinction = final_pop_count == 0;
     let dfs = rec.get();
 
@@ -319,6 +320,18 @@ fn extract_pop_stats(
             .unwrap_or(0) as usize;
 
         (stats, deaths, grows)
+    } else if let Some(consumption) = dfs.get("consumption") {
+        let pop_by_tick = consumption
+            .clone()
+            .lazy()
+            .group_by([col("tick")])
+            .agg([col("pop_id").n_unique().alias("pop_count")])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+        let series = col_f64(&pop_by_tick, "pop_count");
+        let stats = compute_tail_stats(&series, tail_window);
+        (stats, 0, 0)
     } else {
         (compute_tail_stats(&[], tail_window), 0, 0)
     }
@@ -339,6 +352,31 @@ fn extract_food_sat_stats(
             .unwrap();
         let series = col_f64(&sat_by_tick, "food_sat");
         compute_tail_stats(&series, tail_window)
+    } else if let Some(consumption) = dfs.get("consumption") {
+        let sat_by_tick = consumption
+            .clone()
+            .lazy()
+            .with_column(
+                when(col("desired").gt(lit(0.0)))
+                    .then(
+                        when((col("actual") / col("desired")).lt(lit(0.0)))
+                            .then(lit(0.0))
+                            .otherwise(
+                                when((col("actual") / col("desired")).gt(lit(1.0)))
+                                    .then(lit(1.0))
+                                    .otherwise(col("actual") / col("desired")),
+                            ),
+                    )
+                    .otherwise(lit(1.0))
+                    .alias("food_sat"),
+            )
+            .group_by([col("tick")])
+            .agg([col("food_sat").mean().alias("food_sat")])
+            .sort(["tick"], Default::default())
+            .collect()
+            .unwrap();
+        let series = col_f64(&sat_by_tick, "food_sat");
+        compute_tail_stats(&series, tail_window)
     } else {
         compute_tail_stats(&[], tail_window)
     }
@@ -348,8 +386,15 @@ fn extract_emp_rate_stats(
     dfs: &std::collections::HashMap<String, DataFrame>,
     tail_window: usize,
 ) -> TailStats {
-    if let (Some(mortality), Some(assignment)) = (dfs.get("mortality"), dfs.get("assignment")) {
-        let pop_by_tick = mortality
+    if let Some(assignment) = dfs.get("assignment") {
+        let pop_source = if let Some(mortality) = dfs.get("mortality") {
+            mortality
+        } else if let Some(consumption) = dfs.get("consumption") {
+            consumption
+        } else {
+            return compute_tail_stats(&[], tail_window);
+        };
+        let pop_by_tick = pop_source
             .clone()
             .lazy()
             .group_by([col("tick")])

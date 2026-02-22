@@ -1,5 +1,4 @@
 // Core ID types and type aliases
-#[cfg(test)]
 use slotmap::KeyData;
 use slotmap::{Key, new_key_type};
 
@@ -72,12 +71,10 @@ pub fn facility_key_u64(k: FacilityKey) -> u64 {
     k.data().as_ffi()
 }
 
-#[cfg(test)]
 pub fn pop_key_from_u64(v: u64) -> PopKey {
     PopKey::from(KeyData::from_ffi(v))
 }
 
-#[cfg(test)]
 pub fn facility_key_from_u64(v: u64) -> FacilityKey {
     FacilityKey::from(KeyData::from_ffi(v))
 }
