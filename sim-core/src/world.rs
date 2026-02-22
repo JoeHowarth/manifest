@@ -494,6 +494,72 @@ impl World {
         );
         update_wage_emas(&mut settlement.wage_ema, &result);
 
+        // Record fill outcomes for adaptive bidding.
+        let mut fills: HashMap<(FacilityKey, SkillId), u32> = HashMap::new();
+        for assignment in &result.assignments {
+            *fills
+                .entry((assignment.facility_id, assignment.skill))
+                .or_insert(0) += 1;
+        }
+
+        let total_workers: u32 = asks.len() as u32;
+        let mut workers_per_merchant: HashMap<MerchantId, u32> = HashMap::new();
+        for assignment in &result.assignments {
+            if let Some(facility) = settlement.facilities.get(assignment.facility_id) {
+                *workers_per_merchant.entry(facility.owner).or_insert(0) += 1;
+            }
+        }
+
+        for ((facility_key, skill_id), (wanted, mvp)) in &facility_skill_bids {
+            let filled = fills.get(&(*facility_key, *skill_id)).copied().unwrap_or(0);
+            let wage_ema = settlement.wage_ema.get(skill_id).copied().unwrap_or(1.0);
+            let adaptive_bid = settlement
+                .facility_bid_states
+                .get(*facility_key)
+                .map(|s| s.get_bid(*skill_id, wage_ema))
+                .unwrap_or(wage_ema);
+            let unfilled = wanted.saturating_sub(filled);
+            let profitable_unfilled = if *mvp > adaptive_bid { unfilled } else { 0 };
+            let marginal_profitable_mvp = if profitable_unfilled > 0 {
+                Some(*mvp)
+            } else {
+                None
+            };
+
+            if let Some(bid_state) = settlement.facility_bid_states.get_mut(*facility_key) {
+                bid_state.record_outcome(
+                    *skill_id,
+                    filled,
+                    profitable_unfilled,
+                    marginal_profitable_mvp,
+                    *mvp,
+                );
+            }
+        }
+
+        let mut rng = self.rng.clone();
+        let mut bid_state_keys: Vec<FacilityKey> = settlement.facility_bid_states.keys().collect();
+        bid_state_keys.sort_by_key(|k| facility_key_u64(*k));
+        for facility_key in bid_state_keys {
+            let my_merchant = settlement.facilities.get(facility_key).map(|f| f.owner);
+            let my_workers = my_merchant
+                .and_then(|m| workers_per_merchant.get(&m))
+                .copied()
+                .unwrap_or(0);
+            let can_attract_workers = total_workers > my_workers;
+
+            for skill in &skills {
+                if !facility_skill_bids.contains_key(&(facility_key, skill.id)) {
+                    continue;
+                }
+                let wage_ema = settlement.wage_ema.get(&skill.id).copied().unwrap_or(1.0);
+                if let Some(bid_state) = settlement.facility_bid_states.get_mut(facility_key) {
+                    bid_state.adjust_bid(&mut rng, skill.id, wage_ema, can_attract_workers);
+                }
+            }
+        }
+        self.rng = rng;
+
         for pop in settlement.pops.values_mut() {
             pop.employed_at = None;
         }
@@ -512,6 +578,16 @@ impl World {
                 continue;
             };
             pop.employed_at = Some(assignment.facility_id);
+
+            #[cfg(feature = "instrument")]
+            tracing::info!(
+                target: "assignment",
+                tick = self.tick,
+                pop_id = assignment.worker_id,
+                facility_id = facility_key_u64(assignment.facility_id),
+                skill_id = assignment.skill.0,
+                wage = assignment.wage,
+            );
 
             let owner = settlement
                 .facilities
@@ -682,20 +758,41 @@ impl World {
         let mut pop_keys: Vec<PopKey> = settlement.pops.keys().collect();
         pop_keys.sort_by_key(|k| pop_key_u64(*k));
 
-        let mut outcomes: Vec<(PopKey, MortalityOutcome)> = Vec::with_capacity(pop_keys.len());
+        let mut outcomes: Vec<(PopKey, MortalityOutcome, f64)> = Vec::with_capacity(pop_keys.len());
         for pop_key in &pop_keys {
             let Some(pop) = settlement.pops.get(*pop_key) else {
                 continue;
             };
             let food_satisfaction = pop.need_satisfaction.get("food").copied().unwrap_or(0.0);
             let outcome = check_mortality(&mut rng, food_satisfaction);
-            outcomes.push((*pop_key, outcome));
+            outcomes.push((*pop_key, outcome, food_satisfaction));
+        }
+
+        #[cfg(feature = "instrument")]
+        for (pop_key, outcome, food_satisfaction) in &outcomes {
+            let outcome_str = match outcome {
+                MortalityOutcome::Dies => "dies",
+                MortalityOutcome::Grows => "grows",
+                MortalityOutcome::Survives => "survives",
+            };
+            let death_prob = crate::mortality::death_probability(*food_satisfaction);
+            let growth_prob = crate::mortality::growth_probability(*food_satisfaction);
+            tracing::info!(
+                target: "mortality",
+                tick = self.tick,
+                pop_id = pop_key_u64(*pop_key),
+                settlement_id = settlement_id.0,
+                food_satisfaction = *food_satisfaction,
+                death_prob = death_prob,
+                growth_prob = growth_prob,
+                outcome = outcome_str,
+            );
         }
 
         let mut dead_pops: Vec<PopKey> = Vec::new();
         let mut children: Vec<Pop> = Vec::new();
 
-        for (pop_key, outcome) in outcomes {
+        for (pop_key, outcome, _food_satisfaction) in outcomes {
             match outcome {
                 MortalityOutcome::Dies => dead_pops.push(pop_key),
                 MortalityOutcome::Grows => {
