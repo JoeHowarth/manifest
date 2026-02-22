@@ -46,6 +46,107 @@ pub fn variance(data: &[f64]) -> f64 {
     data.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / data.len() as f64
 }
 
+pub fn median(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    sorted[sorted.len() / 2]
+}
+
+/// Coefficient of variation (std / mean). Returns 0 for empty/zero-mean data.
+pub fn cv(values: &[f64]) -> f64 {
+    let m = mean(values);
+    if m.abs() < 1e-15 {
+        0.0
+    } else {
+        std_dev(values) / m
+    }
+}
+
+/// Linear regression slope (value per index step).
+pub fn trend_slope(values: &[f64]) -> f64 {
+    let n = values.len();
+    if n <= 1 {
+        return 0.0;
+    }
+    let n_f = n as f64;
+    let x_mean = (n_f - 1.0) / 2.0;
+    let y_mean = mean(values);
+    let mut num = 0.0;
+    let mut den = 0.0;
+    for (i, &y) in values.iter().enumerate() {
+        let x = i as f64 - x_mean;
+        num += x * (y - y_mean);
+        den += x * x;
+    }
+    if den.abs() < 1e-15 {
+        0.0
+    } else {
+        num / den
+    }
+}
+
+/// Summary statistics for a trailing window of a time series.
+#[derive(Debug, Clone, Copy)]
+pub struct TailStats {
+    pub mean: f64,
+    pub std: f64,
+    pub cv: f64,
+    pub min: f64,
+    pub max: f64,
+    pub slope: f64,
+    pub median: f64,
+}
+
+impl std::fmt::Display for TailStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "mean={:.4} std={:.4} cv={:.4} min={:.4} max={:.4} slope={:.6} median={:.4}",
+            self.mean, self.std, self.cv, self.min, self.max, self.slope, self.median
+        )
+    }
+}
+
+/// Compute tail statistics over the last `tail_window` values.
+pub fn compute_tail_stats(values: &[f64], tail_window: usize) -> TailStats {
+    let tail = trailing(values, tail_window);
+    TailStats {
+        mean: mean(tail),
+        std: std_dev(tail),
+        cv: cv(tail),
+        min: tail.iter().cloned().fold(f64::INFINITY, f64::min),
+        max: tail.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+        slope: trend_slope(tail),
+        median: median(tail),
+    }
+}
+
+/// Extract a polars DataFrame column as Vec<f64>, handling common numeric types.
+pub fn col_f64(df: &polars::prelude::DataFrame, name: &str) -> Vec<f64> {
+    let series = df.column(name).unwrap();
+    match series.dtype() {
+        polars::datatypes::DataType::Float64 => {
+            series.f64().unwrap().into_no_null_iter().collect()
+        }
+        polars::datatypes::DataType::UInt64 => {
+            series.u64().unwrap().into_no_null_iter().map(|v| v as f64).collect()
+        }
+        polars::datatypes::DataType::UInt32 => {
+            series.u32().unwrap().into_no_null_iter().map(|v| v as f64).collect()
+        }
+        polars::datatypes::DataType::Int32 => {
+            series.i32().unwrap().into_no_null_iter().map(|v| v as f64).collect()
+        }
+        polars::datatypes::DataType::Int64 => {
+            series.i64().unwrap().into_no_null_iter().map(|v| v as f64).collect()
+        }
+        dt => panic!("col_f64: unsupported dtype {dt:?} for column {name}"),
+    }
+}
+
 // === BUILDERS ===
 
 pub fn make_grain_profile() -> Vec<GoodProfile> {

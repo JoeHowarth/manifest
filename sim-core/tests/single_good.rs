@@ -637,6 +637,7 @@ fn varying_k_shifts_equilibrium() {
     for &k in ks {
         let s = Scenario {
             subsistence_k: k,
+            world_grain_price: 10.0,
             ticks: 800,
             ..Scenario::standard()
         };

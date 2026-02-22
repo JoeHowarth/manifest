@@ -55,6 +55,7 @@ Tracing subscriber that collects simulation events into column-oriented tables. 
 - **`convergence_baseline.rs`**: Multi-seed snapshot regression
 - **`external_anchor.rs`**: Import/export anchor behavior
 - **`carrying_capacity.rs`**: Population equilibrium under resource limits
+- **`single_good.rs`**: Single-good economy convergence tests (scenario-driven, writes parquet)
 - **`stability_investigation.rs`**: Instrumented DataFrame analysis of stability regimes
 
 ### Specs (`sim-core/specs/current/`)
@@ -67,12 +68,51 @@ Tracing subscriber that collects simulation events into column-oriented tables. 
 
 When investigating simulation behavior (population traps, price spirals, equilibrium failures), **do not guess from code alone**. Use the instrumentation system to ask questions of the data.
 
+### Interactive exploration with duckdb
+
+Tests that use `ScopedRecorder` (or `run_scenario_named` in `single_good.rs`) write parquet files to `sim-core/data/`. Query them interactively with duckdb instead of modifying Rust code:
+
+```bash
+# Run a test to generate parquet
+cd sim-core && cargo test --features instrument --test single_good standard_convergence -- --nocapture
+
+# Find the output directory (timestamped)
+ls data/single_good/
+
+# Query interactively
+cd data/single_good/<latest_dir>
+duckdb
+
+# Example queries:
+# Trajectory at key ticks
+SELECT tick, count(*) as pop, avg(food_satisfaction) as food_sat,
+       sum(case when outcome='dies' then 1 else 0 end) as deaths
+FROM 'mortality.parquet' WHERE tick IN (1,10,50,100,200,400,600)
+GROUP BY tick ORDER BY tick;
+
+# Price trajectory
+SELECT tick, avg(price) as price, sum(quantity) as volume
+FROM 'fill.parquet' WHERE tick % 50 = 0
+GROUP BY tick ORDER BY tick;
+
+# Order book composition
+SELECT tick, agent_type, side, count(*) as n, avg(limit_price) as avg_limit
+FROM 'order.parquet' WHERE tick IN (1, 100, 600)
+GROUP BY tick, agent_type, side ORDER BY tick, agent_type;
+
+# Grain accounting
+SELECT m.tick, sum(p.quantity) as produced, sum(c.actual) as consumed
+FROM 'production_io.parquet' p
+JOIN 'consumption.parquet' c ON p.tick = c.tick
+GROUP BY m.tick ORDER BY m.tick;
+```
+
 ### How to write an investigation test
 
 1. Create an `#[ignore]` test in `stability_investigation.rs` that sets up the exact scenario you're investigating.
 2. Wrap the tick loop with `ScopedRecorder::new("data/investigation", "descriptive_name")`.
 3. Run with `cargo test --features instrument --test stability_investigation <test_name> -- --ignored --nocapture`.
-4. Query the resulting DataFrames with polars to test specific hypotheses.
+4. Query the resulting parquet files with duckdb, or use polars in the test itself for programmatic assertions.
 
 ### Available instrument targets
 
