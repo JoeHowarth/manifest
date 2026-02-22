@@ -178,6 +178,11 @@ pub fn build_subsistence_reservation_ladder(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::pop_key_from_u64;
+
+    fn pk(id: u32) -> PopKey {
+        pop_key_from_u64(id as u64)
+    }
 
     #[test]
     fn subsistence_output_flat_below_capacity() {
@@ -229,7 +234,7 @@ mod tests {
     fn reservation_ladder_is_monotone_for_unemployed() {
         let cfg = SubsistenceReservationConfig::new(1, 1.5, 10, 10.0, 0.10);
         // Use 15 unemployed — straddles the flat and dropoff zones
-        let unemployed: Vec<PopKey> = (1..=15).map(PopKey::new).collect();
+        let unemployed: Vec<PopKey> = (1..=15).map(|i| pk(i as u32)).collect();
         let employed = vec![];
         let queue: Vec<PopKey> = unemployed.clone();
         let ladder =
@@ -237,12 +242,12 @@ mod tests {
 
         for i in 1..15u32 {
             assert!(
-                ladder[&PopKey::new(i)] >= ladder[&PopKey::new(i + 1)],
+                ladder[&pk(i)] >= ladder[&pk(i + 1)],
                 "ladder should be monotone: pop {} ({}) >= pop {} ({})",
                 i,
-                ladder[&PopKey::new(i)],
+                ladder[&pk(i)],
                 i + 1,
-                ladder[&PopKey::new(i + 1)]
+                ladder[&pk(i + 1)]
             );
         }
     }
@@ -250,19 +255,19 @@ mod tests {
     #[test]
     fn employed_pops_get_marginal_reservation() {
         let cfg = SubsistenceReservationConfig::new(1, 1.5, 10, 10.0, 0.10);
-        let unemployed = vec![PopKey::new(1), PopKey::new(2), PopKey::new(3)];
-        let employed = vec![PopKey::new(10), PopKey::new(11)];
+        let unemployed = vec![pk(1), pk(2), pk(3)];
+        let employed = vec![pk(10), pk(11)];
         let queue = unemployed.clone();
         let ladder =
             build_subsistence_reservation_ladder(&employed, &unemployed, 10.0, &cfg, &queue);
 
         // Employed reservation = q(U+1) * price where U=3, NO risk premium
         let expected = subsistence_output_per_worker(4, cfg.q_max, cfg.carrying_capacity) * 10.0;
-        assert!((ladder[&PopKey::new(10)] - expected).abs() < 1e-9);
-        assert!((ladder[&PopKey::new(11)] - expected).abs() < 1e-9);
+        assert!((ladder[&pk(10)] - expected).abs() < 1e-9);
+        assert!((ladder[&pk(11)] - expected).abs() < 1e-9);
 
         // Employed reservation should be < worst unemployed reservation (unemployed have premium)
-        assert!(ladder[&PopKey::new(10)] < ladder[&PopKey::new(3)]);
+        assert!(ladder[&pk(10)] < ladder[&pk(3)]);
     }
 
     #[test]
@@ -279,13 +284,13 @@ mod tests {
     #[test]
     fn ranked_subsistence_yields_give_later_pops_less() {
         // 3 pops, K=2 — first 2 get q_max, third gets less
-        let pops = vec![PopKey::new(11), PopKey::new(9), PopKey::new(10)];
+        let pops = vec![pk(11), pk(9), pk(10)];
         let yields = ranked_subsistence_yields(&pops, 1.0, 2);
         assert_eq!(yields.len(), 3);
         // Sorted by PopKey ascending
-        assert_eq!(yields[0].0, PopKey::new(9));
-        assert_eq!(yields[1].0, PopKey::new(10));
-        assert_eq!(yields[2].0, PopKey::new(11));
+        assert_eq!(yields[0].0, pk(9));
+        assert_eq!(yields[1].0, pk(10));
+        assert_eq!(yields[2].0, pk(11));
         // First two at capacity → same output
         assert!((yields[0].1 - yields[1].1).abs() < 1e-9);
         // Third is beyond K → less output
@@ -295,32 +300,32 @@ mod tests {
     #[test]
     fn ordered_yields_respect_queue_order() {
         // Queue has pop 5, 3, 1 — they should get ranks 1, 2, 3 respectively
-        let queue = vec![PopKey::new(5), PopKey::new(3), PopKey::new(1)];
-        let unemployed = vec![PopKey::new(1), PopKey::new(3), PopKey::new(5)];
+        let queue = vec![pk(5), pk(3), pk(1)];
+        let unemployed = vec![pk(1), pk(3), pk(5)];
         let yields = ordered_subsistence_yields(&queue, &unemployed, 1.0, 2);
         assert_eq!(yields.len(), 3);
-        assert_eq!(yields[0].0, PopKey::new(5)); // rank 1
-        assert_eq!(yields[1].0, PopKey::new(3)); // rank 2
-        assert_eq!(yields[2].0, PopKey::new(1)); // rank 3
+        assert_eq!(yields[0].0, pk(5)); // rank 1
+        assert_eq!(yields[1].0, pk(3)); // rank 2
+        assert_eq!(yields[2].0, pk(1)); // rank 3
     }
 
     #[test]
     fn ordered_yields_appends_non_queue_pops_at_back() {
         // Queue has pop 5 only, but pops 3 and 7 are also unemployed
-        let queue = vec![PopKey::new(5)];
-        let unemployed = vec![PopKey::new(7), PopKey::new(3), PopKey::new(5)];
+        let queue = vec![pk(5)];
+        let unemployed = vec![pk(7), pk(3), pk(5)];
         let yields = ordered_subsistence_yields(&queue, &unemployed, 1.0, 10);
         assert_eq!(yields.len(), 3);
-        assert_eq!(yields[0].0, PopKey::new(5)); // queue member first
-        assert_eq!(yields[1].0, PopKey::new(3)); // non-queue sorted by id
-        assert_eq!(yields[2].0, PopKey::new(7));
+        assert_eq!(yields[0].0, pk(5)); // queue member first
+        assert_eq!(yields[1].0, pk(3)); // non-queue sorted by id
+        assert_eq!(yields[2].0, pk(7));
     }
 
     #[test]
     fn risk_premium_increases_unemployed_reservation() {
         let cfg_no_premium = SubsistenceReservationConfig::new(1, 1.0, 10, 10.0, 0.0);
         let cfg_with_premium = SubsistenceReservationConfig::new(1, 1.0, 10, 10.0, 0.20);
-        let unemployed = vec![PopKey::new(1), PopKey::new(2)];
+        let unemployed = vec![pk(1), pk(2)];
         let employed = vec![];
         let queue = unemployed.clone();
 
@@ -340,7 +345,7 @@ mod tests {
         );
 
         // With 20% premium, unemployed reservation should be 20% higher
-        let ratio = ladder_yes[&PopKey::new(1)] / ladder_no[&PopKey::new(1)];
+        let ratio = ladder_yes[&pk(1)] / ladder_no[&pk(1)];
         assert!(
             (ratio - 1.20).abs() < 1e-9,
             "expected 1.20 ratio, got {ratio}"
