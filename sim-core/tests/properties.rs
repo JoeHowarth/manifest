@@ -260,12 +260,49 @@ fn entities_persist_across_ticks() {
         world.run_tick(&good_profiles, &needs, &Vec::<Recipe>::new());
 
         let listed_pop_count: usize = world.settlements.values().map(|s| s.pops.len()).sum();
-        let actual_pop_count: usize = world.settlements.values().map(|s| s.pops.len()).sum();
+        let actual_pop_count: usize = world
+            .settlements
+            .keys()
+            .copied()
+            .map(|sid| world.pops_at(sid).count())
+            .sum();
         assert_eq!(
             listed_pop_count, actual_pop_count,
             "Settlement pop lists out of sync at tick {}: listed={}, actual={}",
             tick, listed_pop_count, actual_pop_count
         );
+
+        // Employment references must always point to local facilities.
+        for settlement in world.settlements.values() {
+            for pop in settlement.pops.values() {
+                if let Some(facility_key) = pop.employed_at {
+                    assert!(
+                        settlement.facilities.contains_key(facility_key),
+                        "Pop references missing local facility at tick {}",
+                        tick
+                    );
+                }
+            }
+        }
+
+        // Merchant ownership handles must resolve and match facility ownership.
+        for merchant in world.merchants.values() {
+            for handle in &merchant.owned_facilities {
+                let settlement = world
+                    .settlements
+                    .get(&handle.settlement)
+                    .expect("owned facility settlement must exist");
+                let facility = settlement
+                    .facilities
+                    .get(handle.key)
+                    .expect("owned facility key must resolve");
+                assert_eq!(
+                    facility.owner, merchant.id,
+                    "merchant owned_facilities has a handle not owned by merchant at tick {}",
+                    tick
+                );
+            }
+        }
 
         assert_eq!(
             world.settlements.len(),
