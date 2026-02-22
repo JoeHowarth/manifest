@@ -525,10 +525,7 @@ mod tests {
     }
 
     fn budgets(pairs: &[(u32, f64)]) -> HashMap<FacilityKey, f64> {
-        pairs
-            .iter()
-            .map(|&(id, amt)| (fk(id), amt))
-            .collect()
+        pairs.iter().map(|&(id, amt)| (fk(id), amt)).collect()
     }
 
     fn fk(id: u32) -> FacilityKey {
@@ -1074,12 +1071,7 @@ mod tests {
 
             // Track which facilities got workers
             let hires: Vec<bool> = (1..=4)
-                .map(|f| {
-                    result
-                        .assignments
-                        .iter()
-                        .any(|a| a.facility_id == fk(f))
-                })
+                .map(|f| result.assignments.iter().any(|a| a.facility_id == fk(f)))
                 .collect();
 
             // Count global workers vs jobs

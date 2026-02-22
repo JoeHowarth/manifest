@@ -77,3 +77,9 @@ impl Pop {
         self.employed_at.is_some()
     }
 }
+
+impl Default for Pop {
+    fn default() -> Self {
+        Self::new()
+    }
+}
