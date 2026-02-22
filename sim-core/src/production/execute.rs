@@ -182,7 +182,7 @@ mod tests {
     use super::*;
     use crate::labor::SkillId;
     use crate::production::{FacilityType, RecipeId};
-    use crate::types::MerchantId;
+    use crate::types::{MerchantId, facility_key_from_u64};
 
     // Test goods
     const GRAIN: GoodId = 1;
@@ -219,6 +219,10 @@ mod tests {
             .with_output(BREAD, 1.5)
     }
 
+    fn fk() -> FacilityKey {
+        facility_key_from_u64(1)
+    }
+
     #[test]
     fn test_allocate_single_recipe() {
         let workers: HashMap<SkillId, u32> = [(baker(), 2)].into();
@@ -229,7 +233,7 @@ mod tests {
         stockpile.add(GRAIN, 10.0);
 
         let recipes = vec![basic_bread_recipe()];
-        let allocation = allocate_recipes(&facility, &recipes, &stockpile);
+        let allocation = allocate_recipes(fk(), &facility, &recipes, &stockpile);
 
         // With 2 bakers, 10 capacity, 10 grain:
         // - Each recipe needs 1 baker, 2 capacity, 2 grain
@@ -247,7 +251,7 @@ mod tests {
         stockpile.add(GRAIN, 20.0);
 
         let recipes = vec![basic_bread_recipe()]; // costs 2 capacity each
-        let allocation = allocate_recipes(&facility, &recipes, &stockpile);
+        let allocation = allocate_recipes(fk(), &facility, &recipes, &stockpile);
 
         // Limited by capacity: 4 / 2 = 2 instances
         assert_eq!(allocation.runs.get(&RecipeId::new(1)), Some(&2));
@@ -263,7 +267,7 @@ mod tests {
         stockpile.add(GRAIN, 5.0); // Only 5 grain
 
         let recipes = vec![basic_bread_recipe()]; // needs 2 grain each
-        let allocation = allocate_recipes(&facility, &recipes, &stockpile);
+        let allocation = allocate_recipes(fk(), &facility, &recipes, &stockpile);
 
         // Limited by grain: floor(5 / 2) = 2 instances
         assert_eq!(allocation.runs.get(&RecipeId::new(1)), Some(&2));
@@ -281,7 +285,7 @@ mod tests {
         stockpile.add(GRAIN, 10.0);
 
         let recipes = vec![basic_bread_recipe(), hardtack_recipe()];
-        let allocation = allocate_recipes(&facility, &recipes, &stockpile);
+        let allocation = allocate_recipes(fk(), &facility, &recipes, &stockpile);
 
         // Basic bread runs first (1 baker -> 1 instance, uses 2 grain, 2 capacity)
         // Then hardtack (2 laborers -> 2 instances, uses 2 grain, 2 capacity)
@@ -300,7 +304,7 @@ mod tests {
         stockpile.add(GRAIN, 10.0);
 
         let recipes = vec![basic_bread_recipe()]; // Only works at Bakery
-        let allocation = allocate_recipes(&facility, &recipes, &stockpile);
+        let allocation = allocate_recipes(fk(), &facility, &recipes, &stockpile);
 
         // Should not run any recipes
         assert!(allocation.runs.is_empty());

@@ -548,7 +548,7 @@ pub fn apply_fill_merchant(merchant: &mut MerchantAgent, settlement: SettlementI
 mod tests {
     use super::*;
 
-    fn make_buy(id: u64, agent_id: u32, qty: f64, price: f64) -> Order {
+    fn make_buy(id: u64, agent_id: u64, qty: f64, price: f64) -> Order {
         Order {
             id,
             agent_id,
@@ -559,7 +559,7 @@ mod tests {
         }
     }
 
-    fn make_sell(id: u64, agent_id: u32, qty: f64, price: f64) -> Order {
+    fn make_sell(id: u64, agent_id: u64, qty: f64, price: f64) -> Order {
         Order {
             id,
             agent_id,
@@ -591,7 +591,7 @@ mod tests {
 
         // 10 workers available at price 5
         for i in 100..110 {
-            orders.push(make_sell(i, i as u32, 1.0, 5.0));
+            orders.push(make_sell(i, i, 1.0, 5.0));
         }
 
         let result = clear_single_market(1, &orders, None, None, PriceBias::FavorSellers);
@@ -699,8 +699,8 @@ mod tests {
 
         // 10 buyers, each with budget 1.0
         // Each generates orders at prices 1.2, 1.6, 2.0, 2.4, 2.8
-        for buyer_id in 1..=10u32 {
-            orders.push(make_buy(buyer_id as u64 * 10 + 1, buyer_id, 2.0, 1.2)); // want 2 @ 1.2
+        for buyer_id in 1..=10u64 {
+            orders.push(make_buy(buyer_id * 10 + 1, buyer_id, 2.0, 1.2)); // want 2 @ 1.2
             orders.push(make_buy(buyer_id as u64 * 10 + 2, buyer_id, 1.5, 1.6));
             orders.push(make_buy(buyer_id as u64 * 10 + 3, buyer_id, 1.0, 2.0));
             orders.push(make_buy(buyer_id as u64 * 10 + 4, buyer_id, 0.5, 2.4));
@@ -714,7 +714,7 @@ mod tests {
         }
 
         let mut budgets = HashMap::new();
-        for buyer_id in 1..=10u32 {
+        for buyer_id in 1..=10u64 {
             budgets.insert(buyer_id, 1.0); // each buyer has budget 1.0
         }
         budgets.insert(100, 10000.0); // seller

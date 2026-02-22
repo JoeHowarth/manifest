@@ -482,6 +482,7 @@ pub fn apply_assignments(facilities: &mut [(FacilityKey, Facility)], result: &La
 mod tests {
     use super::super::skills::WorkerId;
     use super::*;
+    use crate::types::facility_key_from_u64;
 
     // === TEST HELPERS ===
 
@@ -508,7 +509,7 @@ mod tests {
     fn bid(id: u64, facility: u32, skill: u32, max_wage: f64) -> LaborBid {
         LaborBid {
             id,
-            facility_id: FacilityKey(facility),
+            facility_id: fk(facility),
             skill: SkillId(skill),
             max_wage,
         }
@@ -517,7 +518,7 @@ mod tests {
     fn ask(id: u64, worker: u32, skill: u32, min_wage: f64) -> LaborAsk {
         LaborAsk {
             id,
-            worker_id: worker,
+            worker_id: worker as u64,
             skill: SkillId(skill),
             min_wage,
         }
@@ -526,8 +527,12 @@ mod tests {
     fn budgets(pairs: &[(u32, f64)]) -> HashMap<FacilityKey, f64> {
         pairs
             .iter()
-            .map(|&(id, amt)| (FacilityKey(id), amt))
+            .map(|&(id, amt)| (fk(id), amt))
             .collect()
+    }
+
+    fn fk(id: u32) -> FacilityKey {
+        facility_key_from_u64(id as u64)
     }
 
     fn emas(pairs: &[(u32, f64)]) -> HashMap<SkillId, f64> {
@@ -628,7 +633,7 @@ mod tests {
         let total_paid: f64 = result
             .assignments
             .iter()
-            .filter(|a| a.facility_id == FacilityKey(1))
+            .filter(|a| a.facility_id == fk(1))
             .map(|a| a.wage)
             .sum();
 
@@ -745,7 +750,7 @@ mod tests {
 
         assert_eq!(result.assignments.len(), 1);
         assert_eq!(result.assignments[0].skill, skill(2)); // assigned as smith
-        assert_eq!(result.assignments[0].facility_id, FacilityKey(1));
+        assert_eq!(result.assignments[0].facility_id, fk(1));
     }
 
     #[test]
@@ -965,12 +970,12 @@ mod tests {
         let f1_hires: usize = result_full
             .assignments
             .iter()
-            .filter(|a| a.facility_id == FacilityKey(1))
+            .filter(|a| a.facility_id == fk(1))
             .count();
         let f2_hires: usize = result_full
             .assignments
             .iter()
-            .filter(|a| a.facility_id == FacilityKey(2))
+            .filter(|a| a.facility_id == fk(2))
             .count();
         assert_eq!(f1_hires, 3, "facility 1 gets 3 workers");
         assert_eq!(f2_hires, 3, "facility 2 gets 3 workers");
@@ -1013,12 +1018,12 @@ mod tests {
         let f1_hires_scarce: usize = result_scarce
             .assignments
             .iter()
-            .filter(|a| a.facility_id == FacilityKey(1))
+            .filter(|a| a.facility_id == fk(1))
             .count();
         let f2_hires_scarce: usize = result_scarce
             .assignments
             .iter()
-            .filter(|a| a.facility_id == FacilityKey(2))
+            .filter(|a| a.facility_id == fk(2))
             .count();
 
         // Facility 1 (MVP=100) should get all 3 slots filled
@@ -1073,7 +1078,7 @@ mod tests {
                     result
                         .assignments
                         .iter()
-                        .any(|a| a.facility_id == FacilityKey(f))
+                        .any(|a| a.facility_id == fk(f))
                 })
                 .collect();
 
