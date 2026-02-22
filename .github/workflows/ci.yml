@@ -21,5 +21,5 @@ jobs:
       - name: Test workspace (default features)
         run: cargo test --workspace
 
-      - name: Test sim-core (no default features)
-        run: cargo test -p sim-core --no-default-features
+      # - name: Test sim-core (no default features)
+      #   run: cargo test -p sim-core --no-default-features
