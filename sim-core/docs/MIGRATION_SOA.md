@@ -16,25 +16,33 @@ Replace the current `HashMap<PopId, Pop>` / `HashMap<FacilityId, Facility>` arch
 ### SettlementState — owns all settlement-local entities
 
 ```rust
+use slotmap::{SlotMap, new_key_type};
+
+new_key_type! { pub struct PopKey; }
+new_key_type! { pub struct FacilityKey; }
+
 pub struct SettlementState {
+    pub id: SettlementId,
     pub info: Settlement,               // name, position, resource_slots
 
-    // Pops (dense Vec, not HashMap)
-    pub pops: Vec<Pop>,
-    // Index: PopId → position in pops vec (for O(1) lookup by ID)
-    pub pop_index: HashMap<PopId, usize>,
+    // Pops (dense generational arena — O(1) insert/remove/lookup, no manual index)
+    pub pops: SlotMap<PopKey, Pop>,
 
-    // Facilities (dense Vec)
-    pub facilities: Vec<Facility>,
-    pub facility_index: HashMap<FacilityId, usize>,
+    // Facilities (dense generational arena)
+    pub facilities: SlotMap<FacilityKey, Facility>,
 
-    // Per-settlement market state
+    // Per-settlement market & labor state
     pub price_ema: HashMap<GoodId, Price>,
-    pub facility_bid_states: HashMap<FacilityId, FacilityBidState>,
-    pub subsistence_queue: Vec<PopId>,
+    pub wage_ema: HashMap<SkillId, Price>,
+    pub facility_bid_states: HashMap<FacilityKey, FacilityBidState>,
+    pub subsistence_queue: Vec<PopKey>,
     pub depth_multipliers: HashMap<GoodId, f64>,
 }
 ```
+
+**Why SlotMap over Vec + HashMap index:** `slotmap` is already a dependency. It provides dense storage with O(1) insert, remove, and lookup. Generational keys prevent use-after-free bugs that would be easy to introduce with raw Vec indices during mortality's swap_remove. No manual index bookkeeping needed.
+
+**Key type migration:** The current `PopId(u32)` / `FacilityId(u32)` newtypes become `PopKey` / `FacilityKey` (SlotMap generational keys) for internal storage. The old `PopId` can be kept as a stable external ID (for instrumentation/tracing) stored as a field on Pop, with a lightweight `HashMap<PopId, (SettlementId, PopKey)>` reverse index on World for the rare cases that need ID-based lookup from outside a settlement.
 
 ### World — global state + settlement container
 
@@ -46,9 +54,6 @@ pub struct World {
 
     // Merchants remain global (they span settlements)
     pub merchants: HashMap<MerchantId, MerchantAgent>,
-
-    // Global labor state
-    pub wage_ema: HashMap<SkillId, Price>,
 
     // Global config (immutable during tick)
     pub external_market: Option<ExternalMarketConfig>,
@@ -77,7 +82,7 @@ pub struct World {
 | `subsistence_queues` | `World.subsistence_queues[sid]` | `SettlementState.subsistence_queue` | Already per-settlement |
 | `trade_depth_multipliers` | `World.trade_depth_multipliers[(sid,gid)]` | `SettlementState.depth_multipliers[gid]` | Already per-settlement-keyed |
 | Merchants | `World.merchants` | **Stays global** | Merchants span settlements via stockpiles |
-| `wage_ema` | `World.wage_ema` | **Stays global** | Labor market clears globally across settlements |
+| `wage_ema` | `World.wage_ema[skill]` | `SettlementState.wage_ema[skill]` | Labor is per-settlement (pops can't commute between cities in the 1700s) |
 | External market config | `World.external_market` | **Stays global** | Immutable config |
 | Routes | `World.routes` | **Stays global** | Cross-settlement by definition |
 
@@ -89,41 +94,38 @@ This is the structural change. Every subsequent phase is a refactor within this 
 
 **1a. Create `SettlementState` struct**
 
-Define `SettlementState` with `pops: Vec<Pop>`, `facilities: Vec<Facility>`, plus the index HashMaps. Keep all the same entity types — no field changes to `Pop` or `Facility` yet.
+Define `SettlementState` with `pops: SlotMap<PopKey, Pop>`, `facilities: SlotMap<FacilityKey, Facility>`. Keep all the same entity types — no field changes to `Pop` or `Facility` yet.
 
 **1b. Change `World` to hold `HashMap<SettlementId, SettlementState>`**
 
-Remove `World.pops`, `World.facilities`, `World.settlements`. Replace with `World.settlement_states`. Move `price_ema`, `facility_bid_states`, `subsistence_queues`, `trade_depth_multipliers` into `SettlementState`.
+Remove `World.pops`, `World.facilities`, `World.settlements`. Replace with `World.settlement_states`. Move `price_ema`, `wage_ema`, `facility_bid_states`, `subsistence_queues`, `trade_depth_multipliers` into `SettlementState`.
 
 **1c. Update World builder methods**
 
-- `add_settlement()` creates a `SettlementState`
-- `add_pop(settlement_id)` pushes to `settlement_states[settlement_id].pops` and updates `pop_index`
-- `add_facility(type, settlement_id, owner_id)` pushes to `settlement_states[settlement_id].facilities` and updates `facility_index`
-- `get_pop(id)` needs a way to find which settlement a pop is in. Options:
-  - Keep a global `HashMap<PopId, SettlementId>` reverse index (cheap, O(1))
-  - Or require callers to provide the settlement (cleaner API, pushes settlement-awareness up)
-- `get_facility(id)` — same choice
-
-Decision: **keep a lightweight global reverse index** for the builder/accessor methods, since tests and setup code use `get_pop(id)` extensively without knowing the settlement. The hot tick path won't use it.
+- `add_settlement()` creates a `SettlementState` with empty SlotMaps
+- `add_pop(settlement_id)` inserts into `settlement_states[settlement_id].pops` (SlotMap returns `PopKey`)
+- `add_facility(type, settlement_id, owner_id)` inserts into `settlement_states[settlement_id].facilities`
+- `get_pop(id)` needs a way to find which settlement a pop is in — keep a lightweight reverse index:
 
 ```rust
 // In World:
-pop_to_settlement: HashMap<PopId, SettlementId>,
-facility_to_settlement: HashMap<FacilityId, SettlementId>,
+pop_to_settlement: HashMap<PopKey, SettlementId>,
+facility_to_settlement: HashMap<FacilityKey, SettlementId>,
 ```
+
+Tests and setup code use `get_pop(id)` extensively without knowing the settlement. The hot tick path won't use this reverse index — it iterates the SlotMap directly.
 
 **1d. Update accessor methods**
 
-- `pops_at_settlement(sid)` → `&self.settlement_states[&sid].pops` (direct slice, no filter)
-- `facilities_at_settlement(sid)` → `&self.settlement_states[&sid].facilities` (direct slice, no filter)
+- `pops_at_settlement(sid)` → `&self.settlement_states[&sid].pops` (iterate SlotMap directly)
+- `facilities_at_settlement(sid)` → `&self.settlement_states[&sid].facilities`
 - `merchants_at_settlement(sid)` → derive from `settlement_states[&sid].facilities` owners (local scan, not global)
-- `get_pop(id)` → use reverse index to find settlement, then index into vec
-- `get_pop_mut(id)` → same
+- `get_pop(key)` → use reverse index to find settlement, then `state.pops[key]`
+- `get_pop_mut(key)` → same
 
 **1e. Compile and fix all call sites**
 
-This will touch most of the codebase. The compiler will guide us — every `self.pops.get(&id)` becomes a lookup through the reverse index or a direct settlement-scoped access.
+This will touch most of the codebase. The compiler will guide us — every `self.pops.get(&id)` becomes either a direct SlotMap access within a settlement context, or a reverse-index lookup for global access.
 
 ### Phase 2: Rewrite run_settlement_tick to take &mut SettlementState
 
@@ -223,52 +225,62 @@ self.merchants = merchants;
 
 This is one extract/reinsert for ALL merchants, not per-settlement. And it enables future parallelism since each settlement only touches its own merchants' stockpiles.
 
-### Phase 3: Refactor the labor phase
+### Phase 3: Make labor per-settlement
 
-The labor phase is the trickiest because it currently runs globally. It reads facilities from all settlements, generates bids, clears a unified labor market, then applies assignments back to pops across settlements.
+The labor phase is currently global — it pools ALL facilities' bids and ALL pops' asks into one `clear_labor_markets` call. But there's no fundamental reason for this:
+- Pops are settlement-bound (`home_settlement` is fixed, they can't commute)
+- Facilities are settlement-bound (`settlement: SettlementId` is fixed)
+- A London pop being assigned to a Paris facility is a bug, not a feature
+- `clear_labor_markets` has zero settlement filtering — it just happens to work with one settlement
 
-**Key constraint**: `wage_ema` is global. Labor clearing uses it to prioritize skill markets. Assignments flow across all settlements.
+The current global `wage_ema: HashMap<SkillId, Price>` reinforces the accident — one wage per skill across all settlements. In reality, 1780s wages varied enormously by location.
 
-**3a. Keep labor as a global phase, but read from SettlementStates**
+**3a. Move wage_ema into SettlementState**
 
-Don't try to parallelize labor yet. Instead:
-- Iterate `self.settlement_states` to collect facility bids (replacing the current `self.facilities.values()` loop)
-- Iterate `self.settlement_states` to collect pop asks
-- Clear globally (same as today)
-- Apply assignments by looking up pops in their settlement's storage
+Each settlement gets its own `wage_ema: HashMap<SkillId, Price>`. Initialize from the global value during migration.
+
+**3b. Run labor clearing per-settlement**
+
+The labor phase becomes a method on SettlementState (or a free function taking `&mut SettlementState`):
 
 ```rust
-// Bid generation: iterate facilities per settlement
-for (sid, state) in &self.settlement_states {
-    for facility in &state.facilities {
-        // generate bids using state.price_ema, self.merchants, self.wage_ema
+for (sid, state) in &mut self.settlement_states {
+    // Bids: only this settlement's facilities
+    let bids = state.facilities.iter()
+        .flat_map(|f| generate_facility_bids(f, state.price_ema, state.wage_ema, ...))
+        .collect();
+
+    // Asks: only this settlement's pops
+    let asks = state.pops.iter()
+        .flat_map(|p| generate_pop_asks(p, ...))
+        .collect();
+
+    // Clear this settlement's labor market independently
+    let result = clear_labor_markets(&skills, &bids, &asks, &state.wage_ema, &budgets);
+
+    // Update this settlement's wage_ema
+    update_wage_emas(&mut state.wage_ema, &result);
+
+    // Apply assignments — all pops and facilities are local, no reverse index needed
+    for assignment in &result.assignments {
+        let pop = state.pops.get_mut(pop_key);
+        pop.employed_at = Some(assignment.facility_id);
+        // ...
     }
-}
-
-// Ask generation: iterate pops per settlement
-for (sid, state) in &self.settlement_states {
-    for pop in &state.pops {
-        // generate asks
-    }
-}
-
-// Clearing: unchanged (global)
-let result = clear_labor_markets(...);
-
-// Apply assignments: use reverse index or settlement-aware lookup
-for assignment in &result.assignments {
-    let pop_id = PopId::new(assignment.worker_id);
-    let sid = self.pop_to_settlement[&pop_id];
-    let state = self.settlement_states.get_mut(&sid).unwrap();
-    let pop = &mut state.pops[state.pop_index[&pop_id]];
-    pop.employed_at = Some(assignment.facility_id);
-    // ...
 }
 ```
 
-**3b. Update subsistence queue management**
+**3c. The "no double hire" concern disappears**
+
+Since pops only appear in their own settlement's ask list, the global `filled_workers: HashSet<u32>` dedup in `clear_labor_markets` still works but is now purely local. No pop can be double-hired across settlements.
+
+**3d. Update subsistence queue management**
 
 `update_subsistence_queues()` currently iterates `self.settlements` and `self.pops`. Change to iterate `self.settlement_states`, accessing `state.pops` and `state.subsistence_queue` directly.
+
+**3e. Future: cross-settlement wage information diffusion**
+
+If desired later, merchants operating in multiple settlements could carry wage signals between them as a separate post-tick diffusion step. This is a feature to add intentionally, not an accident of flat data structures.
 
 ### Phase 4: Refactor mortality
 
@@ -298,7 +310,7 @@ This becomes embarrassingly parallel once we handle the global `next_agent_id` c
 - Mark-and-compact at end of mortality phase (batch the removals)
 - Use a `Vec<Option<Pop>>` with free list (avoids compaction but wastes cache space)
 
-Recommendation: **swap_remove + update pop_index**. Deaths are rare relative to population size, so the index updates are cheap.
+Recommendation: **use `SlotMap`** (already a dependency). Generational keys handle removal correctly with no manual index bookkeeping, and internal storage is dense. See the note on SlotMap below.
 
 ### Phase 5: Replace Pop's inner HashMaps with fixed-size arrays
 
@@ -372,15 +384,13 @@ This is a phase 6 concern and doesn't need to be solved during the initial migra
 
 Each phase should be a separate PR that keeps all tests passing:
 
-1. **Phase 1+2** together (structural change + tick rewrite) — this is the big bang, unavoidable since the data structure change touches everything. Run full test suite including convergence tests to verify economic behavior is unchanged.
+1. **Phase 1+2+3** together (structural change + tick rewrite + per-settlement labor) — this is the big bang, unavoidable since the data structure change touches everything. With labor also going per-settlement, there's no reason to keep a global labor phase as an intermediate step. Run full test suite including convergence tests to verify economic behavior is unchanged. Note: per-settlement labor will change convergence behavior slightly (settlements no longer share a wage signal), so baselines may need updating.
 
-2. **Phase 3** (labor refactor) — should produce identical labor clearing results. Validate with instrumented tests comparing assignment counts and wages.
+2. **Phase 4** (mortality per-settlement) — validate population trajectories match baseline.
 
-3. **Phase 4** (mortality refactor) — validate population trajectories match baseline.
+3. **Phase 5** (fixed-size arrays) — purely mechanical, behavior identical. Good candidate for property-based testing (old vs new produce same results).
 
-4. **Phase 5** (fixed-size arrays) — purely mechanical, behavior identical. Good candidate for property-based testing (old vs new produce same results).
-
-5. **Phase 6** (rayon) — add `rayon` parallelism, verify determinism with fixed seeds (may need to accept non-deterministic ordering for mortality within a settlement).
+4. **Phase 6** (rayon) — add `rayon` parallelism, verify determinism with fixed seeds (may need to accept non-deterministic ordering for mortality within a settlement).
 
 ## Risk: Merchant State During Parallel Settlement Ticks
 
