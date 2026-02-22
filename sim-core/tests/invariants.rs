@@ -6,16 +6,26 @@ use std::collections::HashMap;
 
 use sim_core::{
     AnchoredGoodConfig, ExternalMarketConfig, GoodId, GoodProfile, Need, NeedContribution,
-    OutsideFlowTotals, Pop, PopId, Price, Recipe, SettlementFriction, SettlementId,
+    OutsideFlowTotals, Pop, PopKey, Price, Recipe, SettlementFriction, SettlementId,
     SubsistenceReservationConfig, UtilityCurve, World,
+    pop_key_from_u64,
     production::{FacilityType, RecipeId},
     run_settlement_tick,
 };
 
+fn pk(id: u64) -> PopKey {
+    pop_key_from_u64(id)
+}
+
+fn pop_count(world: &World) -> usize {
+    world.settlements.values().map(|s| s.pops.len()).sum()
+}
+
 fn total_grain(world: &World) -> f64 {
     let pop_grain: f64 = world
-        .pops
+        .settlements
         .values()
+        .flat_map(|s| s.pops.values())
         .map(|p| p.stocks.get(&GRAIN).copied().unwrap_or(0.0))
         .sum();
     let merchant_grain: f64 = world
@@ -28,7 +38,12 @@ fn total_grain(world: &World) -> f64 {
 }
 
 fn total_currency(world: &World) -> f64 {
-    let pop_currency: f64 = world.pops.values().map(|p| p.currency).sum();
+    let pop_currency: f64 = world
+        .settlements
+        .values()
+        .flat_map(|s| s.pops.values())
+        .map(|p| p.currency)
+        .sum();
     let merchant_currency: f64 = world.merchants.values().map(|m| m.currency).sum();
     pop_currency + merchant_currency
 }
@@ -41,7 +56,7 @@ fn invariant_currency_conserved_under_population_growth() {
     // Large population makes growth virtually guaranteed in one tick.
     for _ in 0..500 {
         let pop_id = world.add_pop(settlement).unwrap();
-        let pop = world.get_pop_mut(pop_id).unwrap();
+        let pop = world.pop_mut(pop_id).unwrap();
         pop.stocks.insert(GRAIN, 100.0);
         pop.desired_consumption_ema.insert(GRAIN, 1.0);
     }
@@ -88,12 +103,12 @@ fn invariant_pop_cannot_sell_more_than_inventory() {
     }];
     let needs: HashMap<String, Need> = HashMap::new();
 
-    let mut seller = Pop::new(PopId::new(1), settlement);
+    let mut seller = Pop::new();
     seller.currency = 0.0;
     seller.stocks.insert(GRAIN, 2.0); // tiny inventory
     seller.desired_consumption_ema.insert(GRAIN, 0.001); // target=0.005 => near-full stock is "excess"
 
-    let mut buyer = Pop::new(PopId::new(2), settlement);
+    let mut buyer = Pop::new();
     buyer.currency = 10_000.0;
     buyer.income_ema = 10_000.0;
     buyer.stocks.insert(GRAIN, 0.0);
@@ -101,7 +116,7 @@ fn invariant_pop_cannot_sell_more_than_inventory() {
 
     let initial_stock = seller.stocks.get(&GRAIN).copied().unwrap_or(0.0);
 
-    let mut pops: Vec<&mut Pop> = vec![&mut seller, &mut buyer];
+    let mut pops: Vec<(PopKey, &mut Pop)> = vec![(pk(1), &mut seller), (pk(2), &mut buyer)];
     let mut merchants = Vec::new();
     let _ = run_settlement_tick(
         1,
@@ -139,13 +154,13 @@ fn invariant_labor_assignment_accounting_consistent() {
         .unwrap();
 
     {
-        let facility = world.get_facility_mut(farm_a).unwrap();
+        let facility = world.facility_mut(farm_a).unwrap();
         facility.capacity = 50;
         facility.recipe_priorities = vec![RecipeId::new(1)];
         facility.workers.insert(LABORER, 50);
     }
     {
-        let facility = world.get_facility_mut(farm_b).unwrap();
+        let facility = world.facility_mut(farm_b).unwrap();
         facility.capacity = 50;
         facility.recipe_priorities = vec![RecipeId::new(1)];
         facility.workers.insert(LABORER, 50);
@@ -159,18 +174,19 @@ fn invariant_labor_assignment_accounting_consistent() {
 
     for i in 0..100 {
         let pop_id = world.add_pop(settlement).unwrap();
-        let pop = world.get_pop_mut(pop_id).unwrap();
+        let pop = world.pop_mut(pop_id).unwrap();
         pop.skills.insert(LABORER);
         pop.min_wage = 0.5;
         pop.currency = 100.0;
         pop.income_ema = 1.0;
         pop.stocks.insert(GRAIN, 5.0);
         pop.desired_consumption_ema.insert(GRAIN, 1.0);
-        pop.employed_at = Some(if i % 2 == 0 { farm_a } else { farm_b });
+        pop.employed_at = Some(if i % 2 == 0 { farm_a.key } else { farm_b.key });
     }
 
-    world.wage_ema.insert(LABORER, 1.0);
-    world.price_ema.insert((settlement, GRAIN), 1.0);
+    let s = world.settlements.get_mut(&settlement).unwrap();
+    s.wage_ema.insert(LABORER, 1.0);
+    s.price_ema.insert(GRAIN, 1.0);
 
     let good_profiles = vec![GoodProfile {
         good: GRAIN,
@@ -199,18 +215,20 @@ fn invariant_labor_assignment_accounting_consistent() {
             .with_output(GRAIN, 1.0),
     ];
 
-    let initial_pop_count = world.pops.len();
+    let initial_pop_count = pop_count(&world);
     for _ in 0..80 {
         world.run_tick(&good_profiles, &needs, &recipes);
 
         let employed_now = world
-            .pops
+            .settlements
             .values()
+            .flat_map(|s| s.pops.values())
             .filter(|p| p.employed_at.is_some())
             .count();
         let workers_in_facilities: usize = world
-            .facilities
+            .settlements
             .values()
+            .flat_map(|s| s.facilities.values())
             .map(|f| f.workers.values().sum::<u32>() as usize)
             .sum();
 
@@ -219,25 +237,27 @@ fn invariant_labor_assignment_accounting_consistent() {
             "Employment/facility worker mismatch: employed={employed_now}, facility_workers={workers_in_facilities}"
         );
         assert!(
-            employed_now <= world.pops.len(),
+            employed_now <= pop_count(&world),
             "More employed pops than total pops: employed={employed_now}, total={}",
-            world.pops.len()
+            pop_count(&world)
         );
 
-        for facility in world.facilities.values() {
+        for facility in world
+            .settlements
+            .values()
+            .flat_map(|s| s.facilities.values())
+        {
             let total_workers: u32 = facility.workers.values().sum();
             assert!(
                 total_workers <= facility.capacity,
-                "Facility over capacity: facility={:?}, workers={}, capacity={}",
-                facility.id,
-                total_workers,
-                facility.capacity
+                "Facility over capacity: workers={}, capacity={}",
+                total_workers, facility.capacity
             );
         }
     }
 
     assert_eq!(
-        world.pops.len(),
+        pop_count(&world),
         initial_pop_count,
         "Population should stay constant when mortality is disabled"
     );
@@ -255,13 +275,13 @@ fn invariant_external_flow_matches_local_currency_delta() {
     }];
     let needs: HashMap<String, Need> = HashMap::new();
 
-    let mut seller = Pop::new(PopId::new(1), settlement);
+    let mut seller = Pop::new();
     seller.currency = 0.0;
     seller.income_ema = 0.0;
     seller.stocks.insert(GRAIN, 50.0);
     seller.desired_consumption_ema.insert(GRAIN, 0.01);
 
-    let mut buyer = Pop::new(PopId::new(2), settlement);
+    let mut buyer = Pop::new();
     buyer.currency = 200.0;
     buyer.income_ema = 200.0;
     buyer.stocks.insert(GRAIN, 0.0);
@@ -292,7 +312,7 @@ fn invariant_external_flow_matches_local_currency_delta() {
     for tick in 1..=10 {
         let pre_currency = seller.currency + buyer.currency;
         let mut flows = OutsideFlowTotals::default();
-        let mut pops: Vec<&mut Pop> = vec![&mut seller, &mut buyer];
+        let mut pops: Vec<(PopKey, &mut Pop)> = vec![(pk(1), &mut seller), (pk(2), &mut buyer)];
         let mut merchants = Vec::new();
         let _ = run_settlement_tick(
             tick,
@@ -343,9 +363,9 @@ fn invariant_subsistence_allocates_more_to_earlier_pops() {
     }];
     let needs: HashMap<String, Need> = HashMap::new();
 
-    let mut pop_a = Pop::new(PopId::new(1), settlement);
-    let mut pop_b = Pop::new(PopId::new(2), settlement);
-    let mut pop_c = Pop::new(PopId::new(3), settlement);
+    let mut pop_a = Pop::new();
+    let mut pop_b = Pop::new();
+    let mut pop_c = Pop::new();
     pop_a.stocks.insert(GRAIN, 0.0);
     pop_b.stocks.insert(GRAIN, 0.0);
     pop_c.stocks.insert(GRAIN, 0.0);
@@ -358,9 +378,10 @@ fn invariant_subsistence_allocates_more_to_earlier_pops() {
 
     // Queue orders pops as [3, 1, 2] — pop3 rank 1, pop1 rank 2, pop2 rank 3.
     // With k=2: pop3 and pop1 get q_max (1.5), pop2 gets 0.75 (crowding).
-    let queue = vec![PopId::new(3), PopId::new(1), PopId::new(2)];
+    let queue = vec![pk(3), pk(1), pk(2)];
 
-    let mut pops: Vec<&mut Pop> = vec![&mut pop_a, &mut pop_b, &mut pop_c];
+    let mut pops: Vec<(PopKey, &mut Pop)> =
+        vec![(pk(1), &mut pop_a), (pk(2), &mut pop_b), (pk(3), &mut pop_c)];
     let mut merchants = Vec::new();
     let _ = run_settlement_tick(
         1,
@@ -398,7 +419,7 @@ fn invariant_closed_economy_tick_residual_near_zero() {
         .unwrap();
 
     {
-        let facility = world.get_facility_mut(farm).unwrap();
+        let facility = world.facility_mut(farm).unwrap();
         facility.capacity = 20;
         facility.recipe_priorities = vec![RecipeId::new(1)];
         facility.workers.insert(LABORER, 20);
@@ -410,18 +431,19 @@ fn invariant_closed_economy_tick_residual_near_zero() {
 
     for _ in 0..20 {
         let pop_id = world.add_pop(settlement).unwrap();
-        let pop = world.get_pop_mut(pop_id).unwrap();
+        let pop = world.pop_mut(pop_id).unwrap();
         pop.skills.insert(LABORER);
         pop.min_wage = 0.5;
         pop.currency = 500.0;
         pop.income_ema = 2.0;
         pop.stocks.insert(GRAIN, 100.0);
         pop.desired_consumption_ema.insert(GRAIN, 1.0);
-        pop.employed_at = Some(farm);
+        pop.employed_at = Some(farm.key);
     }
 
-    world.wage_ema.insert(LABORER, 2.0);
-    world.price_ema.insert((settlement, GRAIN), 1.0);
+    let s = world.settlements.get_mut(&settlement).unwrap();
+    s.wage_ema.insert(LABORER, 2.0);
+    s.price_ema.insert(GRAIN, 1.0);
 
     let good_profiles = vec![GoodProfile {
         good: GRAIN,
@@ -499,7 +521,7 @@ fn invariant_open_economy_grain_accounting_balanced() {
         .unwrap();
 
     {
-        let facility = world.get_facility_mut(farm).unwrap();
+        let facility = world.facility_mut(farm).unwrap();
         facility.capacity = 10;
         facility.recipe_priorities = vec![RecipeId::new(1)];
         facility.workers.insert(LABORER, 10);
@@ -512,18 +534,19 @@ fn invariant_open_economy_grain_accounting_balanced() {
 
     for _ in 0..10 {
         let pop_id = world.add_pop(settlement).unwrap();
-        let pop = world.get_pop_mut(pop_id).unwrap();
+        let pop = world.pop_mut(pop_id).unwrap();
         pop.skills.insert(LABORER);
         pop.min_wage = 0.5;
         pop.currency = 500.0;
         pop.income_ema = 2.0;
         pop.stocks.insert(GRAIN, 50.0);
         pop.desired_consumption_ema.insert(GRAIN, 1.0);
-        pop.employed_at = Some(farm);
+        pop.employed_at = Some(farm.key);
     }
 
-    world.wage_ema.insert(LABORER, 2.0);
-    world.price_ema.insert((settlement, GRAIN), 1.0);
+    let s = world.settlements.get_mut(&settlement).unwrap();
+    s.wage_ema.insert(LABORER, 2.0);
+    s.price_ema.insert(GRAIN, 1.0);
 
     // Enable external anchor
     let mut external = ExternalMarketConfig::default();

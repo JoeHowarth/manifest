@@ -32,7 +32,7 @@ fn create_test_world(num_settlements: usize, pops_per_settlement: usize) -> Worl
             let pop_id = world.add_pop(settlement_id).unwrap();
 
             // Give pops initial currency and stocks
-            let pop = world.get_pop_mut(pop_id).unwrap();
+            let pop = world.pop_mut(pop_id).unwrap();
             pop.currency = 100.0;
             pop.stocks.insert(GRAIN, 50.0);
             pop.stocks.insert(BREAD, 20.0);
@@ -85,7 +85,12 @@ fn create_needs() -> HashMap<String, Need> {
 
 /// Calculate total currency across all pops and merchants
 fn total_currency(world: &World) -> f64 {
-    let pop_currency: f64 = world.pops.values().map(|p| p.currency).sum();
+    let pop_currency: f64 = world
+        .settlements
+        .values()
+        .flat_map(|s| s.pops.values())
+        .map(|p| p.currency)
+        .sum();
     let merchant_currency: f64 = world.merchants.values().map(|m| m.currency).sum();
     pop_currency + merchant_currency
 }
@@ -93,8 +98,9 @@ fn total_currency(world: &World) -> f64 {
 /// Calculate total stock of a good across all pops and merchants
 fn total_stock(world: &World, good: GoodId) -> f64 {
     let pop_stock: f64 = world
-        .pops
+        .settlements
         .values()
+        .flat_map(|s| s.pops.values())
         .map(|p| p.stocks.get(&good).copied().unwrap_or(0.0))
         .sum();
 
@@ -110,11 +116,11 @@ fn total_stock(world: &World, good: GoodId) -> f64 {
 
 /// Check if any agent has negative stock
 fn has_negative_stock(world: &World) -> Option<(String, GoodId, f64)> {
-    for pop in world.pops.values() {
+    for pop in world.settlements.values().flat_map(|s| s.pops.values()) {
         for (&good, &qty) in &pop.stocks {
             if qty < -0.0001 {
                 // Small epsilon for float comparison
-                return Some((format!("Pop {:?}", pop.id), good, qty));
+                return Some(("Pop".to_string(), good, qty));
             }
         }
     }
@@ -138,9 +144,9 @@ fn has_negative_stock(world: &World) -> Option<(String, GoodId, f64)> {
 
 /// Check if any agent has negative currency
 fn has_negative_currency(world: &World) -> Option<(String, f64)> {
-    for pop in world.pops.values() {
+    for pop in world.settlements.values().flat_map(|s| s.pops.values()) {
         if pop.currency < -0.0001 {
-            return Some((format!("Pop {:?}", pop.id), pop.currency));
+            return Some(("Pop".to_string(), pop.currency));
         }
     }
 
@@ -253,28 +259,12 @@ fn entities_persist_across_ticks() {
     for tick in 0..20 {
         world.run_tick(&good_profiles, &needs, &Vec::<Recipe>::new());
 
-        // Population can change due growth/death mechanics. The true invariant is
-        // referential consistency: each settlement's pop list must map to existing pops.
-        let mut listed_pop_count = 0usize;
-        for settlement in world.settlements.values() {
-            for pop_id in &settlement.pop_ids {
-                assert!(
-                    world.pops.contains_key(pop_id),
-                    "Settlement {:?} references missing pop {:?} at tick {}",
-                    settlement.id,
-                    pop_id,
-                    tick
-                );
-                listed_pop_count += 1;
-            }
-        }
+        let listed_pop_count: usize = world.settlements.values().map(|s| s.pops.len()).sum();
+        let actual_pop_count: usize = world.settlements.values().map(|s| s.pops.len()).sum();
         assert_eq!(
-            listed_pop_count,
-            world.pops.len(),
+            listed_pop_count, actual_pop_count,
             "Settlement pop lists out of sync at tick {}: listed={}, actual={}",
-            tick,
-            listed_pop_count,
-            world.pops.len()
+            tick, listed_pop_count, actual_pop_count
         );
 
         assert_eq!(
@@ -300,33 +290,26 @@ fn price_ema_stays_bounded() {
     for tick in 0..50 {
         world.run_tick(&good_profiles, &needs, &Vec::<Recipe>::new());
 
-        for ((settlement, good), price) in &world.price_ema {
-            assert!(
-                *price >= min_price,
-                "Price too low at tick {}: settlement {:?}, good {}, price {:.6}",
-                tick,
-                settlement,
-                good,
-                price
-            );
+        for settlement in world.settlements.values() {
+            for (good, price) in &settlement.price_ema {
+                assert!(
+                    *price >= min_price,
+                    "Price too low at tick {}: settlement {:?}, good {}, price {:.6}",
+                    tick, settlement.id, good, price
+                );
 
-            assert!(
-                *price <= max_price,
-                "Price too high at tick {}: settlement {:?}, good {}, price {:.2}",
-                tick,
-                settlement,
-                good,
-                price
-            );
+                assert!(
+                    *price <= max_price,
+                    "Price too high at tick {}: settlement {:?}, good {}, price {:.2}",
+                    tick, settlement.id, good, price
+                );
 
-            assert!(
-                price.is_finite(),
-                "Price is not finite at tick {}: settlement {:?}, good {}, price {}",
-                tick,
-                settlement,
-                good,
-                price
-            );
+                assert!(
+                    price.is_finite(),
+                    "Price is not finite at tick {}: settlement {:?}, good {}, price {}",
+                    tick, settlement.id, good, price
+                );
+            }
         }
     }
 }
@@ -394,7 +377,7 @@ fn isolated_settlements_dont_affect_each_other() {
     // Add pops with different initial conditions
     let london_pop = world.add_pop(london).unwrap();
     {
-        let pop = world.get_pop_mut(london_pop).unwrap();
+        let pop = world.pop_mut(london_pop).unwrap();
         pop.currency = 1000.0;
         pop.stocks.insert(GRAIN, 100.0);
         pop.income_ema = 50.0;
@@ -402,7 +385,7 @@ fn isolated_settlements_dont_affect_each_other() {
 
     let paris_pop = world.add_pop(paris).unwrap();
     {
-        let pop = world.get_pop_mut(paris_pop).unwrap();
+        let pop = world.pop_mut(paris_pop).unwrap();
         pop.currency = 100.0;
         pop.stocks.insert(GRAIN, 10.0);
         pop.income_ema = 5.0;
@@ -412,8 +395,8 @@ fn isolated_settlements_dont_affect_each_other() {
     let needs = create_needs();
 
     // Track initial state for isolation assertions
-    let london_initial_currency = world.get_pop(london_pop).unwrap().currency;
-    let paris_initial_currency = world.get_pop(paris_pop).unwrap().currency;
+    let london_initial_currency = world.pop(london_pop).unwrap().currency;
+    let paris_initial_currency = world.pop(paris_pop).unwrap().currency;
 
     // Run ticks
     for _ in 0..10 {
@@ -422,8 +405,8 @@ fn isolated_settlements_dont_affect_each_other() {
 
     // London's currency + grain value should be independent of Paris
     // (Since there are no routes, no trade can happen between them)
-    let london_final = world.get_pop(london_pop).unwrap();
-    let paris_final = world.get_pop(paris_pop).unwrap();
+    let london_final = world.pop(london_pop).unwrap();
+    let paris_final = world.pop(paris_pop).unwrap();
 
     // Both should still have positive resources (no cross-contamination)
     assert!(
@@ -456,7 +439,12 @@ fn prices_tend_toward_stability() {
 
     // Set initial price
     let settlement_id = *world.settlements.keys().next().unwrap();
-    world.price_ema.insert((settlement_id, GRAIN), 1.0);
+    world
+        .settlements
+        .get_mut(&settlement_id)
+        .unwrap()
+        .price_ema
+        .insert(GRAIN, 1.0);
 
     // Track price variance over time
     let mut price_history: Vec<f64> = Vec::new();
@@ -464,7 +452,11 @@ fn prices_tend_toward_stability() {
     for _ in 0..100 {
         world.run_tick(&good_profiles, &needs, &Vec::<Recipe>::new());
 
-        if let Some(&price) = world.price_ema.get(&(settlement_id, GRAIN)) {
+        if let Some(&price) = world
+            .settlements
+            .get(&settlement_id)
+            .and_then(|s| s.price_ema.get(&GRAIN))
+        {
             price_history.push(price);
         }
     }

@@ -94,7 +94,7 @@ pub use accounting::{
 pub use types::{
     AgentId, FacilityHandle, FacilityId, FacilityKey, GoodId, GoodProfile, MerchantId,
     NeedContribution, PopHandle, PopId, PopKey, Price, Quantity, SettlementId, facility_key_u64,
-    pop_key_u64,
+    pop_key_from_u64, pop_key_u64, facility_key_from_u64,
 };
 
 // Agents
