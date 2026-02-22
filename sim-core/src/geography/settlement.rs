@@ -1,6 +1,6 @@
 // Settlement type for multi-location economy
 
-use crate::types::{FacilityId, PopId, SettlementId};
+use crate::types::{FacilityKey, SettlementId};
 
 use super::resources::{ResourceSlot, ResourceType};
 
@@ -10,7 +10,6 @@ pub struct Settlement {
     pub id: SettlementId,
     pub name: String,
     pub position: (f64, f64),
-    pub pop_ids: Vec<PopId>,
     pub resource_slots: Vec<ResourceSlot>,
 }
 
@@ -20,14 +19,8 @@ impl Settlement {
             id,
             name: name.into(),
             position,
-            pop_ids: Vec::new(),
             resource_slots: Vec::new(),
         }
-    }
-
-    pub fn with_pops(mut self, pop_ids: Vec<PopId>) -> Self {
-        self.pop_ids = pop_ids;
-        self
     }
 
     pub fn with_resources(mut self, slots: Vec<ResourceSlot>) -> Self {
@@ -43,7 +36,7 @@ impl Settlement {
     }
 
     /// Claim a resource slot for a facility
-    pub fn claim_slot(&mut self, slot_index: usize, facility_id: FacilityId) -> bool {
+    pub fn claim_slot(&mut self, slot_index: usize, facility_id: FacilityKey) -> bool {
         if let Some(slot) = self.resource_slots.get_mut(slot_index) {
             slot.claim(facility_id)
         } else {
@@ -52,7 +45,7 @@ impl Settlement {
     }
 
     /// Release a resource slot (when facility is demolished)
-    pub fn release_slot(&mut self, facility_id: FacilityId) {
+    pub fn release_slot(&mut self, facility_id: FacilityKey) {
         for slot in &mut self.resource_slots {
             if slot.claimed_by == Some(facility_id) {
                 slot.release();
@@ -61,7 +54,7 @@ impl Settlement {
     }
 
     /// Get the slot claimed by a facility
-    pub fn get_facility_slot(&self, facility_id: FacilityId) -> Option<&ResourceSlot> {
+    pub fn get_facility_slot(&self, facility_id: FacilityKey) -> Option<&ResourceSlot> {
         self.resource_slots
             .iter()
             .find(|s| s.claimed_by == Some(facility_id))

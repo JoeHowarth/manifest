@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::labor::SkillId;
-use crate::types::{GoodId, PopId, Price, Quantity, SettlementId};
+use crate::types::{FacilityKey, GoodId, Price, Quantity};
 
 // === CONSUMPTION ===
 
@@ -16,8 +16,6 @@ pub struct ConsumptionResult {
 /// Makes consumption decisions, participates in labor markets as 1 worker.
 #[derive(Debug, Clone)]
 pub struct Pop {
-    pub id: PopId,
-    pub home_settlement: SettlementId,
     pub currency: f64,
     pub stocks: HashMap<GoodId, Quantity>,
     pub desired_consumption_ema: HashMap<GoodId, Quantity>,
@@ -31,14 +29,12 @@ pub struct Pop {
     /// Minimum acceptable wage (reservation wage)
     pub min_wage: Price,
     /// Current employment: facility this pop works at (if any)
-    pub employed_at: Option<crate::types::FacilityId>,
+    pub employed_at: Option<FacilityKey>,
 }
 
 impl Pop {
-    pub fn new(id: PopId, home_settlement: SettlementId) -> Self {
+    pub fn new() -> Self {
         Self {
-            id,
-            home_settlement,
             currency: 1000.0,
             stocks: HashMap::new(),
             desired_consumption_ema: HashMap::new(),

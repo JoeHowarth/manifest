@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::agents::Stockpile;
 use crate::market::{Order, Side};
-use crate::types::{FacilityId, GoodId, MerchantId, Price, SettlementId};
+use crate::types::{FacilityHandle, GoodId, MerchantId, Price, SettlementId};
 
 // === SUPPLY CURVE CONSTANTS ===
 
@@ -35,7 +35,7 @@ pub struct MerchantAgent {
     pub id: MerchantId,
     pub currency: f64,
     /// Facilities owned by this merchant (enables stockpiling at those settlements)
-    pub facility_ids: HashSet<FacilityId>,
+    pub owned_facilities: HashSet<FacilityHandle>,
     /// Stockpiles at settlements where merchant owns facilities
     pub stockpiles: HashMap<SettlementId, Stockpile>,
     /// EMA of production rate per good per settlement (for buffer target calculation)
@@ -47,7 +47,7 @@ impl MerchantAgent {
         Self {
             id,
             currency: 10000.0,
-            facility_ids: HashSet::new(),
+            owned_facilities: HashSet::new(),
             stockpiles: HashMap::new(),
             production_ema: HashMap::new(),
         }
@@ -135,7 +135,7 @@ impl MerchantAgent {
                 if sell_qty > 0.001 {
                     orders.push(Order {
                         id: 0, // assigned later
-                        agent_id: self.id.0,
+                        agent_id: self.id.0 as u64,
                         good,
                         side: Side::Sell,
                         quantity: sell_qty,

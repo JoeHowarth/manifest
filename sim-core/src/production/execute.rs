@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::agents::Stockpile;
 use crate::labor::SkillId;
-use crate::types::{FacilityId, GoodId, Quantity};
+use crate::types::{FacilityKey, GoodId, Quantity};
 
 use super::facility::Facility;
 use super::recipe::{Recipe, RecipeId};
@@ -14,13 +14,13 @@ use super::recipe::{Recipe, RecipeId};
 /// Result of allocating recipes to a facility
 #[derive(Debug, Clone)]
 pub struct RecipeAllocation {
-    pub facility_id: FacilityId,
+    pub facility_id: FacilityKey,
     /// Recipe ID -> number of instances to run
     pub runs: HashMap<RecipeId, u32>,
 }
 
 impl RecipeAllocation {
-    pub fn new(facility_id: FacilityId) -> Self {
+    pub fn new(facility_id: FacilityKey) -> Self {
         Self {
             facility_id,
             runs: HashMap::new(),
@@ -42,11 +42,12 @@ impl RecipeAllocation {
 ///
 /// Greedy fills by priority order (first recipe in list = highest priority).
 pub fn allocate_recipes(
+    facility_key: FacilityKey,
     facility: &Facility,
     recipes: &[Recipe],
     stockpile: &Stockpile,
 ) -> RecipeAllocation {
-    let mut allocation = RecipeAllocation::new(facility.id);
+    let mut allocation = RecipeAllocation::new(facility_key);
 
     // Track remaining resources
     let mut remaining_capacity = facility.capacity;
@@ -121,7 +122,7 @@ pub fn allocate_recipes(
 /// Result of running production at a facility
 #[derive(Debug, Clone)]
 pub struct ProductionResult {
-    pub facility_id: FacilityId,
+    pub facility_id: FacilityKey,
     /// Inputs consumed (good -> quantity)
     pub inputs_consumed: HashMap<GoodId, Quantity>,
     /// Outputs produced (good -> quantity)
@@ -131,7 +132,7 @@ pub struct ProductionResult {
 }
 
 impl ProductionResult {
-    pub fn new(facility_id: FacilityId) -> Self {
+    pub fn new(facility_id: FacilityKey) -> Self {
         Self {
             facility_id,
             inputs_consumed: HashMap::new(),
@@ -181,7 +182,7 @@ mod tests {
     use super::*;
     use crate::labor::SkillId;
     use crate::production::{FacilityType, RecipeId};
-    use crate::types::{FacilityId, MerchantId, SettlementId};
+    use crate::types::MerchantId;
 
     // Test goods
     const GRAIN: GoodId = 1;
@@ -196,12 +197,7 @@ mod tests {
     }
 
     fn make_facility(workers: HashMap<SkillId, u32>, capacity: u32) -> Facility {
-        let mut facility = Facility::new(
-            FacilityId::new(1),
-            FacilityType::Bakery,
-            SettlementId::new(1),
-            MerchantId::new(1),
-        );
+        let mut facility = Facility::new(FacilityType::Bakery, MerchantId::new(1));
         facility.workers = workers;
         facility.capacity = capacity;
         facility
@@ -312,7 +308,9 @@ mod tests {
 
     #[test]
     fn test_execute_production() {
-        let mut allocation = RecipeAllocation::new(FacilityId::new(1));
+        let mut facilities = slotmap::SlotMap::<FacilityKey, ()>::with_key();
+        let facility_key = facilities.insert(());
+        let mut allocation = RecipeAllocation::new(facility_key);
         allocation.runs.insert(RecipeId::new(1), 3); // 3 instances of basic bread
 
         let mut stockpile = Stockpile::new();
@@ -333,7 +331,9 @@ mod tests {
 
     #[test]
     fn test_execute_with_quality_multiplier() {
-        let mut allocation = RecipeAllocation::new(FacilityId::new(1));
+        let mut facilities = slotmap::SlotMap::<FacilityKey, ()>::with_key();
+        let facility_key = facilities.insert(());
+        let mut allocation = RecipeAllocation::new(facility_key);
         allocation.runs.insert(RecipeId::new(1), 2);
 
         let mut stockpile = Stockpile::new();
