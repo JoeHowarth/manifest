@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::geography::ResourceType;
 use crate::labor::SkillId;
-use crate::types::{FacilityId, MerchantId, SettlementId};
+use crate::types::MerchantId;
 
 use super::RecipeId;
 
@@ -124,9 +124,7 @@ pub fn get_facility_def(facility_type: FacilityType) -> Option<FacilityDef> {
 /// This is mutable game state.
 #[derive(Debug, Clone)]
 pub struct Facility {
-    pub id: FacilityId,
     pub facility_type: FacilityType,
-    pub settlement: SettlementId,
     pub owner: MerchantId,
 
     /// Capacity for running recipes
@@ -146,20 +144,13 @@ pub struct Facility {
 }
 
 impl Facility {
-    pub fn new(
-        id: FacilityId,
-        facility_type: FacilityType,
-        settlement: SettlementId,
-        owner: MerchantId,
-    ) -> Self {
+    pub fn new(facility_type: FacilityType, owner: MerchantId) -> Self {
         let capacity = get_facility_def(facility_type)
             .map(|def| def.base_capacity)
             .unwrap_or(10);
 
         Self {
-            id,
             facility_type,
-            settlement,
             owner,
             capacity,
             resource_slot_index: None,
@@ -212,12 +203,7 @@ mod tests {
 
     #[test]
     fn test_facility_gets_capacity_from_def() {
-        let facility = Facility::new(
-            FacilityId::new(1),
-            FacilityType::Farm,
-            SettlementId::new(1),
-            MerchantId::new(1),
-        );
+        let facility = Facility::new(FacilityType::Farm, MerchantId::new(1));
 
         // Should get capacity from FacilityDef
         assert_eq!(facility.capacity, 10);

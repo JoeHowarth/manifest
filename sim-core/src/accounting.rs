@@ -49,13 +49,20 @@ fn rollup_by_good<T: Copy + Default + std::ops::AddAssign>(
 
 /// Capture the current world-level stock-flow snapshot.
 pub fn capture_world_flow_snapshot(world: &World) -> WorldFlowSnapshot {
-    let pop_currency: f64 = world.pops.values().map(|p| p.currency).sum();
+    let pop_currency: f64 = world
+        .settlements
+        .values()
+        .flat_map(|s| s.pops.values())
+        .map(|p| p.currency)
+        .sum();
     let merchant_currency: f64 = world.merchants.values().map(|m| m.currency).sum();
 
     let mut goods: HashMap<GoodId, Quantity> = HashMap::new();
-    for pop in world.pops.values() {
-        for (good, qty) in &pop.stocks {
-            *goods.entry(*good).or_insert(0.0) += *qty;
+    for settlement in world.settlements.values() {
+        for pop in settlement.pops.values() {
+            for (good, qty) in &pop.stocks {
+                *goods.entry(*good).or_insert(0.0) += *qty;
+            }
         }
     }
     for merchant in world.merchants.values() {

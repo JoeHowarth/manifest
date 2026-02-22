@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use crate::market::{Order, Side};
-use crate::types::{GoodId, Price, Quantity, SettlementId};
+use crate::types::{AgentId, GoodId, Price, Quantity, SettlementId};
 
-pub const OUTSIDE_BASE_AGENT_ID: u32 = u32::MAX;
+pub const OUTSIDE_BASE_AGENT_ID: AgentId = u64::MAX;
 
 /// EMA blending rate for depth multiplier toward target each tick.
 pub const DEPTH_RESPONSE_ALPHA: f64 = 0.1;
@@ -119,18 +119,18 @@ pub enum OutsideAgentRole {
 #[derive(Debug, Clone, Default)]
 pub struct OutsideMarketOrders {
     pub orders: Vec<Order>,
-    pub budgets: HashMap<u32, f64>,
-    pub inventories: HashMap<u32, HashMap<GoodId, f64>>,
-    pub roles: HashMap<u32, OutsideAgentRole>,
+    pub budgets: HashMap<AgentId, f64>,
+    pub inventories: HashMap<AgentId, HashMap<GoodId, f64>>,
+    pub roles: HashMap<AgentId, OutsideAgentRole>,
 }
 
-fn import_agent_id(good: GoodId) -> u32 {
-    let offset = good.saturating_mul(2).saturating_add(1);
+fn import_agent_id(good: GoodId) -> AgentId {
+    let offset = u64::from(good).saturating_mul(2).saturating_add(1);
     OUTSIDE_BASE_AGENT_ID.saturating_sub(offset)
 }
 
-fn export_agent_id(good: GoodId) -> u32 {
-    let offset = good.saturating_mul(2).saturating_add(2);
+fn export_agent_id(good: GoodId) -> AgentId {
+    let offset = u64::from(good).saturating_mul(2).saturating_add(2);
     OUTSIDE_BASE_AGENT_ID.saturating_sub(offset)
 }
 

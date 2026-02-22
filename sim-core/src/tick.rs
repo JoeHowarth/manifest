@@ -10,7 +10,7 @@ use crate::labor::{
 };
 use crate::market::{self, Order, Side};
 use crate::needs::Need;
-use crate::types::{AgentId, GoodId, GoodProfile, PopId, Price, SettlementId};
+use crate::types::{AgentId, GoodId, GoodProfile, PopKey, Price, SettlementId, pop_key_u64};
 
 // === CONSTANTS ===
 
@@ -106,6 +106,7 @@ fn anchored_external_ref_and_weight(
 /// Generate demand curve orders for a population.
 /// Sweeps across price points and generates orders at each level.
 pub fn generate_demand_curve_orders(
+    pop_agent_id: AgentId,
     pop: &Pop,
     good_profiles: &[GoodProfile],
     price_ema: &HashMap<GoodId, Price>,
@@ -143,7 +144,7 @@ pub fn generate_demand_curve_orders(
                 if qty > 0.001 {
                     orders.push(Order {
                         id: 0, // assigned later
-                        agent_id: pop.id.0,
+                        agent_id: pop_agent_id,
                         good,
                         side: Side::Buy,
                         quantity: qty,
@@ -168,7 +169,7 @@ pub fn generate_demand_curve_orders(
                 if qty > 0.001 {
                     orders.push(Order {
                         id: 0, // assigned later
-                        agent_id: pop.id.0,
+                        agent_id: pop_agent_id,
                         good,
                         side: Side::Sell,
                         quantity: qty,
@@ -219,7 +220,7 @@ Update Price and Income EMA
 pub fn run_settlement_tick(
     tick: u64,
     settlement: SettlementId,
-    pops: &mut [&mut Pop],
+    pops: &mut [(PopKey, &mut Pop)],
     merchants: &mut [&mut MerchantAgent],
     good_profiles: &[GoodProfile],
     needs: &HashMap<String, Need>,
@@ -228,16 +229,15 @@ pub fn run_settlement_tick(
     outside_flow_totals: Option<&mut OutsideFlowTotals>,
     subsistence_config: Option<&SubsistenceReservationConfig>,
     depth_multipliers: &HashMap<GoodId, f64>,
-    subsistence_queue: Option<&[PopId]>,
+    subsistence_queue: Option<&[PopKey]>,
 ) -> market::MultiMarketResult {
     // 0. Production
 
     // 0.5 SUBSISTENCE PHASE (in-kind fallback for unemployed pops)
     if let Some(cfg) = subsistence_config {
-        let unemployed_ids: Vec<PopId> = pops
+        let unemployed_ids: Vec<PopKey> = pops
             .iter()
-            .filter(|p| p.employed_at.is_none())
-            .map(|p| p.id)
+            .filter_map(|(k, p)| p.employed_at.is_none().then_some(*k))
             .collect();
 
         let yields = if let Some(queue) = subsistence_queue {
@@ -245,13 +245,13 @@ pub fn run_settlement_tick(
         } else {
             ranked_subsistence_yields(&unemployed_ids, cfg.q_max, cfg.carrying_capacity)
         };
-        let yield_map: HashMap<PopId, f64> = yields.into_iter().collect();
+        let yield_map: HashMap<PopKey, f64> = yields.into_iter().collect();
 
-        for pop in pops.iter_mut() {
+        for (pop_key, pop) in pops.iter_mut() {
             if pop.employed_at.is_some() {
                 continue;
             }
-            let qty = yield_map.get(&pop.id).copied().unwrap_or(0.0);
+            let qty = yield_map.get(pop_key).copied().unwrap_or(0.0);
             if qty <= 0.0 {
                 continue;
             }
@@ -263,7 +263,7 @@ pub fn run_settlement_tick(
                 target: "subsistence",
                 tick = tick,
                 settlement_id = settlement.0,
-                pop_id = pop.id.0,
+                pop_id = pop_key_u64(*pop_key),
                 good_id = cfg.grain_good,
                 quantity = qty,
             );
@@ -271,7 +271,7 @@ pub fn run_settlement_tick(
     }
 
     // 1. CONSUMPTION PHASE
-    for pop in pops.iter_mut() {
+    for (pop_key, pop) in pops.iter_mut() {
         // Reset need satisfaction for this tick (it's per-tick, not cumulative)
         pop.need_satisfaction.clear();
 
@@ -297,7 +297,7 @@ pub fn run_settlement_tick(
                 tracing::info!(
                     target: "consumption",
                     tick = tick,
-                    pop_id = pop.id.0,
+                    pop_id = pop_key_u64(*pop_key),
                     good_id = *good,
                     desired = desired,
                     actual = *qty,
@@ -319,8 +319,9 @@ pub fn run_settlement_tick(
     let mut all_orders = Vec::new();
     let mut next_order_id = 0u64;
 
-    for pop in pops.iter() {
-        let mut orders = generate_demand_curve_orders(pop, good_profiles, price_ema);
+    for (pop_key, pop) in pops.iter() {
+        let mut orders =
+            generate_demand_curve_orders(pop_key_u64(*pop_key), pop, good_profiles, price_ema);
         for o in &mut orders {
             o.id = next_order_id;
             next_order_id += 1;
@@ -412,8 +413,8 @@ pub fn run_settlement_tick(
     // Extra coins accumulate as savings
     let mut budgets: HashMap<AgentId, f64> = pops
         .iter()
-        .map(|p| (p.id.0, p.income_ema.min(p.currency)))
-        .chain(merchants.iter().map(|m| (m.id.0, m.currency)))
+        .map(|(k, p)| (pop_key_u64(*k), p.income_ema.min(p.currency)))
+        .chain(merchants.iter().map(|m| (m.id.0 as u64, m.currency)))
         .collect();
     for (agent, budget) in outside_market.budgets {
         budgets.insert(agent, budget);
@@ -425,12 +426,12 @@ pub fn run_settlement_tick(
     let good_ids: Vec<_> = good_profiles.iter().map(|p| p.good).collect();
     let mut seller_inventories: HashMap<AgentId, HashMap<GoodId, f64>> = pops
         .iter()
-        .map(|p| {
+        .map(|(k, p)| {
             let inv: HashMap<GoodId, f64> = good_ids
                 .iter()
                 .map(|&g| (g, p.stocks.get(&g).copied().unwrap_or(0.0)))
                 .collect();
-            (p.id.0, inv)
+            (pop_key_u64(*k), inv)
         })
         .chain(merchants.iter().map(|m| {
             let inv: HashMap<GoodId, f64> = m
@@ -438,7 +439,7 @@ pub fn run_settlement_tick(
                 .get(&settlement)
                 .map(|stockpile| good_ids.iter().map(|&g| (g, stockpile.get(g))).collect())
                 .unwrap_or_default();
-            (m.id.0, inv)
+            (m.id.0 as u64, inv)
         }))
         .collect();
     for (agent, inv) in outside_market.inventories {
@@ -520,10 +521,16 @@ pub fn run_settlement_tick(
             continue;
         }
 
-        let is_pop = if let Some(pop) = pops.iter_mut().find(|p| p.id.0 == fill.agent_id) {
+        let is_pop = if let Some((_, pop)) = pops
+            .iter_mut()
+            .find(|(k, _)| pop_key_u64(*k) == fill.agent_id)
+        {
             market::apply_fill(pop, fill);
             true
-        } else if let Some(merchant) = merchants.iter_mut().find(|m| m.id.0 == fill.agent_id) {
+        } else if let Some(merchant) = merchants
+            .iter_mut()
+            .find(|m| (m.id.0 as u64) == fill.agent_id)
+        {
             market::apply_fill_merchant(merchant, settlement, fill);
             false
         } else {
@@ -595,41 +602,6 @@ pub fn run_settlement_tick(
     }
 
     result
-}
-
-// === LEGACY API ===
-
-/// Legacy API for running a market tick without settlement context.
-/// Merchants will use a dummy settlement for stockpile access.
-#[deprecated(note = "Use run_settlement_tick instead for proper per-settlement markets")]
-pub fn run_market_tick(
-    populations: &mut [Pop],
-    merchants: &mut [MerchantAgent],
-    good_profiles: &[GoodProfile],
-    needs: &HashMap<String, Need>,
-    price_ema: &mut HashMap<GoodId, Price>,
-) -> market::MultiMarketResult {
-    // Create a dummy settlement for legacy compatibility
-    let dummy_settlement = SettlementId::new(0);
-
-    // Convert to the format expected by run_settlement_tick
-    let mut pop_refs: Vec<&mut Pop> = populations.iter_mut().collect();
-    let mut merchant_refs: Vec<&mut MerchantAgent> = merchants.iter_mut().collect();
-
-    run_settlement_tick(
-        0, // Legacy API doesn't track tick
-        dummy_settlement,
-        &mut pop_refs,
-        &mut merchant_refs,
-        good_profiles,
-        needs,
-        price_ema,
-        None,
-        None,
-        None,
-        &HashMap::new(),
-        None,
-    )
 }
 
 #[cfg(test)]

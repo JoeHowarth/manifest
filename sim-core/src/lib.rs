@@ -92,8 +92,9 @@ pub use accounting::{
 
 // Core types
 pub use types::{
-    AgentId, FacilityId, GoodId, GoodProfile, MerchantId, NeedContribution, PopId, Price, Quantity,
-    SettlementId,
+    AgentId, FacilityHandle, FacilityId, FacilityKey, GoodId, GoodProfile, MerchantId,
+    NeedContribution, PopHandle, PopId, PopKey, Price, Quantity, SettlementId, facility_key_u64,
+    pop_key_u64,
 };
 
 // Agents
@@ -137,8 +138,6 @@ pub use market::{
 pub use needs::{Need, UtilityCurve};
 
 // Tick
-#[allow(deprecated)]
-pub use tick::run_market_tick;
 pub use tick::run_settlement_tick;
 pub use tick::{BUFFER_TICKS, PRICE_SWEEP_MAX, PRICE_SWEEP_MIN, PRICE_SWEEP_POINTS};
 pub use tick::{generate_demand_curve_orders, qty_norm, qty_sell};

@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::agents::Pop;
 use crate::market::{PriceBias, clear_single_market};
 use crate::production::Facility;
-use crate::types::{FacilityId, Price};
+use crate::types::{FacilityKey, Price, facility_key_u64};
 
 use super::production_fn::ProductionFn;
 use super::skills::{SkillDef, SkillId, Worker};
@@ -13,7 +13,7 @@ use super::skills::{SkillDef, SkillId, Worker};
 #[derive(Debug, Clone)]
 pub struct LaborBid {
     pub id: u64,
-    pub facility_id: FacilityId,
+    pub facility_id: FacilityKey,
     pub skill: SkillId,
     pub max_wage: Price, // What we're actually bidding (may be < MVP)
 }
@@ -23,7 +23,7 @@ pub struct LaborBid {
 #[derive(Clone)]
 pub struct LaborAsk {
     pub id: u64,
-    pub worker_id: u32, // Generic ID - can be WorkerId.0 or PopId.0
+    pub worker_id: u64, // Generic ID - can be WorkerId.0 or PopKey-derived id
     pub skill: SkillId,
     pub min_wage: Price,
 }
@@ -132,6 +132,7 @@ pub struct FacilityBidsResult {
 /// Returns both the bids and their MVPs, so the caller can compute which unfilled
 /// slots were "profitable" (MVP > adaptive_bid).
 pub fn generate_facility_bids(
+    facility_key: FacilityKey,
     facility: &Facility,
     production_fn: &dyn ProductionFn,
     wage_emas: &HashMap<SkillId, Price>,
@@ -178,7 +179,7 @@ pub fn generate_facility_bids(
 
                 bids.push(LaborBid {
                     id: next_id,
-                    facility_id: facility.id,
+                    facility_id: facility_key,
                     skill,
                     max_wage: actual_bid,
                 });
@@ -200,7 +201,7 @@ pub fn generate_worker_asks(worker: &Worker) -> Vec<LaborAsk> {
         .map(|&skill| {
             let ask = LaborAsk {
                 id: next_id,
-                worker_id: worker.id.0,
+                worker_id: worker.id.0 as u64,
                 skill,
                 min_wage: worker.min_wage,
             };
@@ -212,13 +213,14 @@ pub fn generate_worker_asks(worker: &Worker) -> Vec<LaborAsk> {
 
 /// Generate labor asks for a pop across all their skills.
 /// Pops participate in labor market as a single worker unit.
-pub fn generate_pop_asks(pop: &Pop, next_id: &mut u64) -> Vec<LaborAsk> {
-    generate_pop_asks_with_min_wage(pop, next_id, pop.min_wage)
+pub fn generate_pop_asks(pop: &Pop, worker_id: u64, next_id: &mut u64) -> Vec<LaborAsk> {
+    generate_pop_asks_with_min_wage(pop, worker_id, next_id, pop.min_wage)
 }
 
 /// Generate labor asks for a pop with an explicit reservation wage.
 pub fn generate_pop_asks_with_min_wage(
     pop: &Pop,
+    worker_id: u64,
     next_id: &mut u64,
     min_wage: Price,
 ) -> Vec<LaborAsk> {
@@ -227,7 +229,7 @@ pub fn generate_pop_asks_with_min_wage(
         .map(|&skill| {
             let ask = LaborAsk {
                 id: *next_id,
-                worker_id: pop.id.0, // Use pop ID as worker ID
+                worker_id,
                 skill,
                 min_wage,
             };
@@ -240,10 +242,10 @@ pub fn generate_pop_asks_with_min_wage(
 // === MARKET CLEARING ===
 
 /// Assignment of a worker to a facility at a wage.
-/// worker_id is generic (u32) to support both Worker and Pop.
+/// worker_id is generic (u64) to support both Worker and Pop.
 pub struct Assignment {
-    pub worker_id: u32,
-    pub facility_id: FacilityId,
+    pub worker_id: u64,
+    pub facility_id: FacilityKey,
     pub skill: SkillId,
     pub wage: Price,
 }
@@ -262,7 +264,7 @@ fn to_orders(bids: &[LaborBid], asks: &[LaborAsk], skill: SkillId) -> Vec<crate:
     for bid in bids.iter().filter(|b| b.skill == skill) {
         orders.push(Order {
             id: bid.id,
-            agent_id: bid.facility_id.0,
+            agent_id: facility_key_u64(bid.facility_id),
             good: skill.0,
             side: Side::Buy,
             quantity: 1.0,
@@ -290,7 +292,7 @@ pub fn clear_labor_markets(
     bids: &[LaborBid],
     asks: &[LaborAsk],
     wage_emas: &HashMap<SkillId, Price>,
-    facility_budgets: &HashMap<FacilityId, f64>,
+    facility_budgets: &HashMap<FacilityKey, f64>,
 ) -> LaborMarketResult {
     use crate::market::Side;
 
@@ -307,7 +309,7 @@ pub fn clear_labor_markets(
 
     let mut assignments = Vec::new();
     let mut clearing_wages = HashMap::new();
-    let mut filled_workers: HashSet<u32> = HashSet::new();
+    let mut filled_workers: HashSet<u64> = HashSet::new();
     let mut remaining_budgets = facility_budgets.clone();
 
     // Track which bids have been used (one hire per bid)
@@ -364,7 +366,7 @@ pub fn clear_labor_markets(
                 .collect();
 
             // Calculate cumulative cost per facility from all their fills
-            let mut facility_costs: HashMap<FacilityId, f64> = HashMap::new();
+            let mut facility_costs: HashMap<FacilityKey, f64> = HashMap::new();
             for buy_fill in &buy_fills {
                 let bid = skill_bids
                     .iter()
@@ -463,11 +465,12 @@ pub fn update_wage_emas(wage_emas: &mut HashMap<SkillId, Price>, result: &LaborM
 }
 
 /// Apply labor assignments to facilities
-pub fn apply_assignments(facilities: &mut [Facility], result: &LaborMarketResult) {
+pub fn apply_assignments(facilities: &mut [(FacilityKey, Facility)], result: &LaborMarketResult) {
     for assignment in &result.assignments {
         if let Some(facility) = facilities
             .iter_mut()
-            .find(|f| f.id == assignment.facility_id)
+            .find(|(key, _)| *key == assignment.facility_id)
+            .map(|(_, f)| f)
         {
             facility.currency -= assignment.wage;
             *facility.workers.entry(assignment.skill).or_insert(0) += 1;
@@ -505,7 +508,7 @@ mod tests {
     fn bid(id: u64, facility: u32, skill: u32, max_wage: f64) -> LaborBid {
         LaborBid {
             id,
-            facility_id: FacilityId(facility),
+            facility_id: FacilityKey(facility),
             skill: SkillId(skill),
             max_wage,
         }
@@ -520,10 +523,10 @@ mod tests {
         }
     }
 
-    fn budgets(pairs: &[(u32, f64)]) -> HashMap<FacilityId, f64> {
+    fn budgets(pairs: &[(u32, f64)]) -> HashMap<FacilityKey, f64> {
         pairs
             .iter()
-            .map(|&(id, amt)| (FacilityId(id), amt))
+            .map(|&(id, amt)| (FacilityKey(id), amt))
             .collect()
     }
 
@@ -625,7 +628,7 @@ mod tests {
         let total_paid: f64 = result
             .assignments
             .iter()
-            .filter(|a| a.facility_id == FacilityId(1))
+            .filter(|a| a.facility_id == FacilityKey(1))
             .map(|a| a.wage)
             .sum();
 
@@ -742,7 +745,7 @@ mod tests {
 
         assert_eq!(result.assignments.len(), 1);
         assert_eq!(result.assignments[0].skill, skill(2)); // assigned as smith
-        assert_eq!(result.assignments[0].facility_id, FacilityId(1));
+        assert_eq!(result.assignments[0].facility_id, FacilityKey(1));
     }
 
     #[test]
@@ -962,12 +965,12 @@ mod tests {
         let f1_hires: usize = result_full
             .assignments
             .iter()
-            .filter(|a| a.facility_id == FacilityId(1))
+            .filter(|a| a.facility_id == FacilityKey(1))
             .count();
         let f2_hires: usize = result_full
             .assignments
             .iter()
-            .filter(|a| a.facility_id == FacilityId(2))
+            .filter(|a| a.facility_id == FacilityKey(2))
             .count();
         assert_eq!(f1_hires, 3, "facility 1 gets 3 workers");
         assert_eq!(f2_hires, 3, "facility 2 gets 3 workers");
@@ -1010,12 +1013,12 @@ mod tests {
         let f1_hires_scarce: usize = result_scarce
             .assignments
             .iter()
-            .filter(|a| a.facility_id == FacilityId(1))
+            .filter(|a| a.facility_id == FacilityKey(1))
             .count();
         let f2_hires_scarce: usize = result_scarce
             .assignments
             .iter()
-            .filter(|a| a.facility_id == FacilityId(2))
+            .filter(|a| a.facility_id == FacilityKey(2))
             .count();
 
         // Facility 1 (MVP=100) should get all 3 slots filled
@@ -1070,7 +1073,7 @@ mod tests {
                     result
                         .assignments
                         .iter()
-                        .any(|a| a.facility_id == FacilityId(f))
+                        .any(|a| a.facility_id == FacilityKey(f))
                 })
                 .collect();
 

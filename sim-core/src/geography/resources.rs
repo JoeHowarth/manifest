@@ -1,6 +1,6 @@
 // Resource types for primary production
 
-use crate::types::FacilityId;
+use crate::types::FacilityKey;
 
 /// Broad categories of natural resources
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -38,7 +38,7 @@ impl ResourceQuality {
 pub struct ResourceSlot {
     pub resource_type: ResourceType,
     pub quality: ResourceQuality,
-    pub claimed_by: Option<FacilityId>,
+    pub claimed_by: Option<FacilityKey>,
 }
 
 impl ResourceSlot {
@@ -54,7 +54,7 @@ impl ResourceSlot {
         self.claimed_by.is_none()
     }
 
-    pub fn claim(&mut self, facility_id: FacilityId) -> bool {
+    pub fn claim(&mut self, facility_id: FacilityKey) -> bool {
         if self.claimed_by.is_some() {
             return false;
         }
@@ -83,13 +83,14 @@ mod tests {
         let mut slot = ResourceSlot::new(ResourceType::Land, ResourceQuality::Normal);
         assert!(slot.is_available());
 
-        let facility = FacilityId::new(1);
+        let mut facilities = slotmap::SlotMap::<FacilityKey, ()>::with_key();
+        let facility = facilities.insert(());
         assert!(slot.claim(facility));
         assert!(!slot.is_available());
         assert_eq!(slot.claimed_by, Some(facility));
 
         // Can't double-claim
-        let other = FacilityId::new(2);
+        let other = facilities.insert(());
         assert!(!slot.claim(other));
 
         slot.release();
