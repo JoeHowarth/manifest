@@ -53,9 +53,19 @@ pub fn clear_single_market(
     }
 
     // Sort buys descending by price (highest bidder first)
-    buys.sort_by(|a, b| b.limit_price.partial_cmp(&a.limit_price).unwrap());
+    buys.sort_by(|a, b| {
+        b.limit_price
+            .partial_cmp(&a.limit_price)
+            .unwrap()
+            .then_with(|| a.id.cmp(&b.id))
+    });
     // Sort sells ascending by price (lowest ask first)
-    sells.sort_by(|a, b| a.limit_price.partial_cmp(&b.limit_price).unwrap());
+    sells.sort_by(|a, b| {
+        a.limit_price
+            .partial_cmp(&b.limit_price)
+            .unwrap()
+            .then_with(|| a.id.cmp(&b.id))
+    });
 
     // Find clearing price: price that maximizes traded volume
     let mut clearing_price = None;
@@ -372,6 +382,7 @@ fn compute_relaxation(
                 .limit_price
                 .partial_cmp(&order_b.limit_price)
                 .unwrap()
+                .then_with(|| order_a.id.cmp(&order_b.id))
         });
 
         // remove orders until feasible

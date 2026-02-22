@@ -6,29 +6,31 @@ Describe what convergence means in current tests, what is gated, and which invar
 
 Primary references:
 
-- `sim-core/tests/convergence.rs`
+- `sim-core/tests/single_good.rs`
+- `sim-core/tests/carrying_capacity.rs`
 - `sim-core/tests/invariants.rs`
 - `sim-core/tests/properties.rs`
 - `sim-core/tests/external_anchor.rs`
 
 ## Convergence Test Structure
 
-Convergence logic is centered in `sim-core/tests/convergence.rs`.
+Convergence checks are currently implemented in:
+
+1. `sim-core/tests/single_good.rs` (multi-scenario convergence characterization around a single food good).
+2. `sim-core/tests/carrying_capacity.rs` (subsistence-only carrying-capacity sweep).
 
 ## Trial model
 
-`run_multi_pop_trial_with_controls(...)` runs a multi-pop scenario and records:
+`run_scenario_named(...)` in `single_good.rs` runs a scenario and records:
 
 1. Price history.
 2. Pop count history.
 3. Employment history.
-4. Merchant stock history.
-5. Net external flow history.
-6. Food satisfaction history.
+4. Food satisfaction history.
 
 ## Analytical pre-check
 
-`predict_equilibrium_population(...)` computes an approximate feasible population range from:
+`predict_equilibrium_pop(...)` computes an approximate feasible population range from:
 
 1. Formal production capacity.
 2. Consumption requirement.
@@ -36,38 +38,25 @@ Convergence logic is centered in `sim-core/tests/convergence.rs`.
 
 This is used as a sanity reference before asserting scenario outcomes.
 
-## Strict convergence criteria
+## Current convergence assertions
 
-`evaluate_convergence(...)` defines strict convergence as all of:
-
-1. No extinction.
-2. Price std in trailing window <= max threshold.
-3. Absolute pop slope <= max threshold.
-4. Absolute merchant stock slope <= max threshold.
-5. Mean employment rate >= min threshold.
-6. Mean food satisfaction >= min threshold.
-
-Default thresholds are set in `ConvergenceThresholds::default()`.
-
-## Weak stability criteria
-
-`is_weakly_stable(...)` defines weaker conditions:
+In `single_good.rs`, active default-suite tests assert combinations of:
 
 1. No extinction.
-2. Price std <= weak threshold.
-3. Employment rate >= weak minimum.
-4. Food satisfaction mean >= weak minimum.
+2. Population tail mean near analytical prediction bands.
+3. Employment and food-satisfaction minima.
+4. Price attractor bounds in the standard scenario.
+5. Collapse behavior when subsistence capacity is intentionally reduced.
 
-Weak stability is used as the success criterion in key sweep gating.
+`single_good.rs` also contains broader sweep characterization tests
+(`varying_starting_conditions`, `varying_k_shifts_equilibrium`) that are
+currently `#[ignore]` and intended for explicit runs.
 
-## Gated vs non-gated scenarios
+In `carrying_capacity.rs`, active sweeps assert:
 
-In `multi_pop_sweep_initial_conditions()`:
-
-1. Moderate scenarios are gating with minimum success-rate requirements across reps.
-2. Stress scenarios are characterization-only (printed metrics, non-gating).
-
-This intentionally separates regressions from exploratory diagnostics.
+1. Tail stability across repeated reps per start condition.
+2. Tight carrying-capacity band across wide initial populations.
+3. Agreement between simulated carrying capacity and analytical subsistence prediction.
 
 ## Instrumentation and DataFrames
 
@@ -77,7 +66,7 @@ The workspace includes an instrumentation crate (`instrument`) that can:
 2. Convert tables to polars DataFrames.
 3. Persist DataFrames as parquet.
 
-Convergence test file includes analysis helpers over DataFrames, but these are currently helper functions rather than always-on gating checks.
+`single_good.rs` uses this instrumentation path for DataFrame-backed tail metrics and is compiled only when the `instrument` feature is enabled.
 
 ## Invariants (Targeted)
 
@@ -116,4 +105,3 @@ Use this hierarchy when evaluating system health:
 1. Invariants and property tests must hold.
 2. Gated convergence scenarios should meet success-rate thresholds.
 3. Stress scenario outputs indicate robustness envelope, not strict correctness failure by themselves.
-

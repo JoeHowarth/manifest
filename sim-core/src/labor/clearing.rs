@@ -299,7 +299,10 @@ pub fn clear_labor_markets(
     skill_order.sort_by(|a, b| {
         let ema_a = wage_emas.get(a).unwrap_or(&0.0);
         let ema_b = wage_emas.get(b).unwrap_or(&0.0);
-        ema_b.partial_cmp(ema_a).unwrap()
+        ema_b
+            .partial_cmp(ema_a)
+            .unwrap()
+            .then_with(|| a.0.cmp(&b.0))
     });
 
     let mut assignments = Vec::new();

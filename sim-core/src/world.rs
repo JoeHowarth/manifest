@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 
+use rand::{SeedableRng, rngs::StdRng};
+
 use crate::accounting::{TickStockFlow, capture_world_flow_snapshot, decompose_tick_flow};
 use crate::agents::{MerchantAgent, Pop, Stockpile};
 use crate::external::{ExternalMarketConfig, OutsideFlowTotals};
@@ -53,6 +55,9 @@ pub struct World {
     next_settlement_id: u32,
     next_agent_id: u32, // shared counter for PopId and MerchantId to avoid collisions
     next_facility_id: u32,
+
+    // Deterministic simulation RNG (seedable for reproducible tests)
+    rng: StdRng,
 }
 
 impl Default for World {
@@ -63,6 +68,7 @@ impl Default for World {
 
 impl World {
     pub fn new() -> Self {
+        let mut thread_rng = rand::rng();
         Self {
             tick: 0,
             settlements: HashMap::new(),
@@ -83,7 +89,20 @@ impl World {
             next_settlement_id: 0,
             next_agent_id: 0, // shared counter for PopId and MerchantId
             next_facility_id: 0,
+            rng: StdRng::from_rng(&mut thread_rng),
         }
+    }
+
+    /// Construct a world with a deterministic RNG seed.
+    pub fn with_seed(seed: u64) -> Self {
+        let mut world = Self::new();
+        world.rng = StdRng::seed_from_u64(seed);
+        world
+    }
+
+    /// Reset simulation RNG to a deterministic seed.
+    pub fn set_random_seed(&mut self, seed: u64) {
+        self.rng = StdRng::seed_from_u64(seed);
     }
 
     pub fn set_external_market(&mut self, config: ExternalMarketConfig) {
@@ -568,6 +587,8 @@ impl World {
                 parent: None,
             })
             .collect();
+        let mut skills = skills;
+        skills.sort_by_key(|skill| skill.id.0);
 
         if skills.is_empty() {
             return;
@@ -582,7 +603,12 @@ impl World {
         let mut bids: Vec<LaborBid> = Vec::new();
         let mut next_bid_id = 0u64;
 
-        for facility in self.facilities.values() {
+        let mut facility_ids: Vec<FacilityId> = self.facilities.keys().copied().collect();
+        facility_ids.sort_by_key(|id| id.0);
+        for facility_id in facility_ids {
+            let Some(facility) = self.facilities.get(&facility_id) else {
+                continue;
+            };
             // Get output price for this facility's settlement (simplified MVP)
             let output_price = self
                 .price_ema
@@ -710,7 +736,12 @@ impl World {
 
         let mut asks = Vec::new();
         let mut next_ask_id = 0u64;
-        for pop in self.pops.values() {
+        let mut pop_ids: Vec<PopId> = self.pops.keys().copied().collect();
+        pop_ids.sort_by_key(|id| id.0);
+        for pop_id in pop_ids {
+            let Some(pop) = self.pops.get(&pop_id) else {
+                continue;
+            };
             let reservation = subsistence_reservation_by_pop
                 .get(&pop.id)
                 .copied()
@@ -834,12 +865,17 @@ impl World {
         }
 
         // Adjust bids for next tick
-        let mut rng = rand::rng();
-        for (facility_id, bid_state) in self.facility_bid_states.iter_mut() {
+        let mut rng = self.rng.clone();
+        let mut facility_ids: Vec<FacilityId> = self.facility_bid_states.keys().copied().collect();
+        facility_ids.sort_by_key(|id| id.0);
+        for facility_id in facility_ids {
+            let Some(bid_state) = self.facility_bid_states.get_mut(&facility_id) else {
+                continue;
+            };
             // Monopsony detection: can this facility's owner attract workers
             // by raising wages? Only if there are workers NOT employed by this
             // owner (either unemployed or at competing merchants).
-            let my_merchant = self.facilities.get(facility_id).map(|f| f.owner);
+            let my_merchant = self.facilities.get(&facility_id).map(|f| f.owner);
             let my_workers = my_merchant
                 .and_then(|m| workers_per_merchant.get(&m))
                 .copied()
@@ -849,11 +885,12 @@ impl World {
             for skill in &skills {
                 let wage_ema = self.wage_ema.get(&skill.id).copied().unwrap_or(1.0);
                 // Only adjust if this facility had bids for this skill
-                if facility_skill_bids.contains_key(&(*facility_id, skill.id)) {
+                if facility_skill_bids.contains_key(&(facility_id, skill.id)) {
                     bid_state.adjust_bid(&mut rng, skill.id, wage_ema, can_attract_workers);
                 }
             }
         }
+        self.rng = rng;
 
         // === PHASE 6: Apply assignments ===
         // Clear existing employment
@@ -1050,18 +1087,21 @@ impl World {
             return;
         }
 
-        let mut rng = rand::rng();
+        let mut rng = self.rng.clone();
 
-        // Collect pop IDs and their outcomes
-        let outcomes: Vec<(PopId, SettlementId, MortalityOutcome, f64)> = self
-            .pops
-            .iter()
-            .map(|(id, pop)| {
-                let food_satisfaction = pop.need_satisfaction.get("food").copied().unwrap_or(0.0);
-                let outcome = check_mortality(&mut rng, food_satisfaction);
-                (*id, pop.home_settlement, outcome, food_satisfaction)
-            })
-            .collect();
+        // Collect pop IDs and their outcomes in deterministic pop-id order.
+        let mut pop_ids: Vec<PopId> = self.pops.keys().copied().collect();
+        pop_ids.sort_by_key(|id| id.0);
+        let mut outcomes: Vec<(PopId, SettlementId, MortalityOutcome, f64)> =
+            Vec::with_capacity(pop_ids.len());
+        for pop_id in pop_ids {
+            let Some(pop) = self.pops.get(&pop_id) else {
+                continue;
+            };
+            let food_satisfaction = pop.need_satisfaction.get("food").copied().unwrap_or(0.0);
+            let outcome = check_mortality(&mut rng, food_satisfaction);
+            outcomes.push((pop_id, pop.home_settlement, outcome, food_satisfaction));
+        }
 
         #[cfg(feature = "instrument")]
         {
@@ -1155,6 +1195,7 @@ impl World {
                     })
                     .copied()
                     .collect();
+                heirs.sort_by_key(|id| id.0);
                 heirs.shuffle(&mut rng);
                 heirs.truncate(3);
                 let n = heirs.len();
@@ -1189,6 +1230,8 @@ impl World {
                 new_pop.need_satisfaction = child.need_satisfaction;
             }
         }
+
+        self.rng = rng;
     }
 }
 

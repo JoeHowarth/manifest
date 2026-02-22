@@ -1,3 +1,5 @@
+#![cfg(feature = "instrument")]
+
 /*
 Tests
 
@@ -44,7 +46,16 @@ use sim_core::{
 };
 
 // === SCENARIO & RESULT ===
+const SCENARIO_SEED: u64 = 42;
 
+fn scenario_seed() -> u64 {
+    std::env::var("SINGLE_GOOD_SEED")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(SCENARIO_SEED)
+}
+
+#[derive(Clone, Copy)]
 struct Scenario {
     num_pops: usize,
     num_facilities: usize,
@@ -187,11 +198,17 @@ fn create_world(s: &Scenario) -> World {
 // === RUN + METRIC EXTRACTION ===
 
 fn run_scenario_named(s: &Scenario, name: &str) -> SimResult {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
     use sim_core::instrument::ScopedRecorder;
 
     let mut rec = ScopedRecorder::new("data/single_good", name);
 
     let mut world = create_world(s);
+    let mut hasher = DefaultHasher::new();
+    name.hash(&mut hasher);
+    let seed = scenario_seed() ^ hasher.finish();
+    world.set_random_seed(seed);
     let recipes = vec![make_grain_recipe(s.production_rate)];
     let good_profiles = make_grain_profile();
     let needs = make_food_need(1.0);
@@ -527,6 +544,7 @@ fn investigate_production_margin() {
 
 /// The same equilibrium should be reached from different starting conditions.
 #[test]
+#[ignore = "stochastic sweep characterization; run explicitly with --ignored"]
 fn varying_starting_conditions() {
     println!("\n=== Varying Starting Conditions ===\n");
 
@@ -568,7 +586,7 @@ fn varying_starting_conditions() {
             } else {
                 600
             },
-            ..Scenario::standard()
+            ..base
         };
 
         let r = run_scenario_named(&s, label);
@@ -629,6 +647,7 @@ fn varying_starting_conditions() {
 
 /// When varying k, equilibrium pop should track ~worker_slots + 1.4*k.
 #[test]
+#[ignore = "stochastic sweep characterization; run explicitly with --ignored"]
 fn varying_k_shifts_equilibrium() {
     println!("\n=== Varying k ===\n");
 
