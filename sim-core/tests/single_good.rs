@@ -226,16 +226,16 @@ fn run_scenario_named(s: &Scenario, name: &str) -> SimResult {
     let dfs = rec.get();
 
     // -- Price --
-    let price_stats = extract_price_stats(&dfs, s.tail_window);
+    let price_stats = extract_price_stats(dfs, s.tail_window);
 
     // -- Pop count & mortality --
-    let (pop_stats, total_deaths, total_grows) = extract_pop_stats(&dfs, s.tail_window);
+    let (pop_stats, total_deaths, total_grows) = extract_pop_stats(dfs, s.tail_window);
 
     // -- Food satisfaction --
-    let food_sat_stats = extract_food_sat_stats(&dfs, s.tail_window);
+    let food_sat_stats = extract_food_sat_stats(dfs, s.tail_window);
 
     // -- Employment rate --
-    let emp_rate_stats = extract_emp_rate_stats(&dfs, s.tail_window);
+    let emp_rate_stats = extract_emp_rate_stats(dfs, s.tail_window);
 
     SimResult {
         price: price_stats,

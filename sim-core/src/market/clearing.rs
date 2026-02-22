@@ -701,10 +701,10 @@ mod tests {
         // Each generates orders at prices 1.2, 1.6, 2.0, 2.4, 2.8
         for buyer_id in 1..=10u64 {
             orders.push(make_buy(buyer_id * 10 + 1, buyer_id, 2.0, 1.2)); // want 2 @ 1.2
-            orders.push(make_buy(buyer_id as u64 * 10 + 2, buyer_id, 1.5, 1.6));
-            orders.push(make_buy(buyer_id as u64 * 10 + 3, buyer_id, 1.0, 2.0));
-            orders.push(make_buy(buyer_id as u64 * 10 + 4, buyer_id, 0.5, 2.4));
-            orders.push(make_buy(buyer_id as u64 * 10 + 5, buyer_id, 0.1, 2.8)); // tiny @ 2.8
+            orders.push(make_buy(buyer_id * 10 + 2, buyer_id, 1.5, 1.6));
+            orders.push(make_buy(buyer_id * 10 + 3, buyer_id, 1.0, 2.0));
+            orders.push(make_buy(buyer_id * 10 + 4, buyer_id, 0.5, 2.4));
+            orders.push(make_buy(buyer_id * 10 + 5, buyer_id, 0.1, 2.8)); // tiny @ 2.8
         }
 
         // Seller offers 100 units across price ladder

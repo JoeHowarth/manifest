@@ -7,8 +7,7 @@ use std::collections::HashMap;
 use sim_core::{
     AnchoredGoodConfig, ExternalMarketConfig, GoodId, GoodProfile, Need, NeedContribution,
     OutsideFlowTotals, Pop, PopKey, Price, Recipe, SettlementFriction, SettlementId,
-    SubsistenceReservationConfig, UtilityCurve, World,
-    pop_key_from_u64,
+    SubsistenceReservationConfig, UtilityCurve, World, pop_key_from_u64,
     production::{FacilityType, RecipeId},
     run_settlement_tick,
 };
@@ -251,7 +250,8 @@ fn invariant_labor_assignment_accounting_consistent() {
             assert!(
                 total_workers <= facility.capacity,
                 "Facility over capacity: workers={}, capacity={}",
-                total_workers, facility.capacity
+                total_workers,
+                facility.capacity
             );
         }
     }
@@ -380,8 +380,11 @@ fn invariant_subsistence_allocates_more_to_earlier_pops() {
     // With k=2: pop3 and pop1 get q_max (1.5), pop2 gets 0.75 (crowding).
     let queue = vec![pk(3), pk(1), pk(2)];
 
-    let mut pops: Vec<(PopKey, &mut Pop)> =
-        vec![(pk(1), &mut pop_a), (pk(2), &mut pop_b), (pk(3), &mut pop_c)];
+    let mut pops: Vec<(PopKey, &mut Pop)> = vec![
+        (pk(1), &mut pop_a),
+        (pk(2), &mut pop_b),
+        (pk(3), &mut pop_c),
+    ];
     let mut merchants = Vec::new();
     let _ = run_settlement_tick(
         1,

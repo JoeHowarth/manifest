@@ -295,19 +295,28 @@ fn price_ema_stays_bounded() {
                 assert!(
                     *price >= min_price,
                     "Price too low at tick {}: settlement {:?}, good {}, price {:.6}",
-                    tick, settlement.id, good, price
+                    tick,
+                    settlement.id,
+                    good,
+                    price
                 );
 
                 assert!(
                     *price <= max_price,
                     "Price too high at tick {}: settlement {:?}, good {}, price {:.2}",
-                    tick, settlement.id, good, price
+                    tick,
+                    settlement.id,
+                    good,
+                    price
                 );
 
                 assert!(
                     price.is_finite(),
                     "Price is not finite at tick {}: settlement {:?}, good {}, price {}",
-                    tick, settlement.id, good, price
+                    tick,
+                    settlement.id,
+                    good,
+                    price
                 );
             }
         }
