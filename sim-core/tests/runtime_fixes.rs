@@ -359,3 +359,76 @@ fn settlement_order_invariance_for_shared_merchant_multi_tick() {
         reversed.merchant_currency
     );
 }
+
+#[test]
+fn duplicate_settlement_names_do_not_introduce_labor_nondeterminism() {
+    fn scenario(order_forward: bool) -> (usize, usize) {
+        let mut world = World::with_seed(7);
+        world.mortality_grace_ticks = 1_000;
+
+        let (first_id, second_id) = if order_forward {
+            (
+                world.add_settlement("Same", (0.0, 0.0)),
+                world.add_settlement("Same", (1.0, 0.0)),
+            )
+        } else {
+            (
+                world.add_settlement("Same", (1.0, 0.0)),
+                world.add_settlement("Same", (0.0, 0.0)),
+            )
+        };
+        let merchant = world.add_merchant();
+        world
+            .get_merchant_mut(merchant)
+            .expect("merchant should exist")
+            .currency = 1.0;
+
+        configure_single_facility(&mut world, first_id, merchant, 1.0);
+        configure_single_facility(&mut world, second_id, merchant, 1.0);
+        add_single_laborer_pop(&mut world, first_id);
+        add_single_laborer_pop(&mut world, second_id);
+
+        world
+            .settlements
+            .get_mut(&first_id)
+            .expect("first settlement should exist")
+            .wage_ema
+            .insert(LABORER, 1.0);
+        world
+            .settlements
+            .get_mut(&second_id)
+            .expect("second settlement should exist")
+            .wage_ema
+            .insert(LABORER, 1.0);
+
+        let empty_profiles = Vec::new();
+        let empty_needs = HashMap::new();
+        let recipes = vec![make_grain_recipe(1.0)];
+        world.run_tick(&empty_profiles, &empty_needs, &recipes);
+
+        let first_employed = world
+            .pops_at(first_id)
+            .filter(|(_, pop)| pop.employed_at.is_some())
+            .count();
+        let second_employed = world
+            .pops_at(second_id)
+            .filter(|(_, pop)| pop.employed_at.is_some())
+            .count();
+        (first_employed, second_employed)
+    }
+
+    let baseline_forward = scenario(true);
+    let baseline_reversed = scenario(false);
+    for _ in 0..20 {
+        assert_eq!(
+            scenario(true),
+            baseline_forward,
+            "forward duplicate-name run produced nondeterministic outcome"
+        );
+        assert_eq!(
+            scenario(false),
+            baseline_reversed,
+            "reversed duplicate-name run produced nondeterministic outcome"
+        );
+    }
+}

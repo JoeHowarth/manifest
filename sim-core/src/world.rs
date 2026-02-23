@@ -564,6 +564,7 @@ impl World {
                 .unwrap()
                 .then_with(|| a.owner_id.0.cmp(&b.owner_id.0))
                 .then_with(|| a.settlement_name.cmp(&b.settlement_name))
+                .then_with(|| a.settlement_id.0.cmp(&b.settlement_id.0))
                 .then_with(|| {
                     facility_key_u64(a.assignment.facility_id)
                         .cmp(&facility_key_u64(b.assignment.facility_id))
