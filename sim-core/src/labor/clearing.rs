@@ -243,6 +243,7 @@ pub fn generate_pop_asks_with_min_wage(
 
 /// Assignment of a worker to a facility at a wage.
 /// worker_id is generic (u64) to support both Worker and Pop.
+#[derive(Debug, Clone)]
 pub struct Assignment {
     pub worker_id: u64,
     pub facility_id: FacilityKey,
