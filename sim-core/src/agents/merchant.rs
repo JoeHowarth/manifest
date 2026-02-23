@@ -59,10 +59,10 @@ impl MerchantAgent {
     }
 
     /// Check if merchant can stockpile at a settlement (owns a facility there)
-    pub fn can_stockpile_at(&self, _settlement: SettlementId) -> bool {
-        // TODO: Need to look up facility locations
-        // For now, just check if they have any stockpile there
-        false
+    pub fn can_stockpile_at(&self, settlement: SettlementId) -> bool {
+        self.owned_facilities
+            .iter()
+            .any(|facility| facility.settlement == settlement)
     }
 
     /// Get or create stockpile at a settlement (caller must verify facility ownership)
@@ -146,5 +146,26 @@ impl MerchantAgent {
         }
 
         orders
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{MerchantId, SettlementId, facility_key_from_u64};
+
+    #[test]
+    fn can_stockpile_at_checks_owned_facility_settlement() {
+        let mut merchant = MerchantAgent::new(MerchantId::new(1));
+        let a = SettlementId::new(1);
+        let b = SettlementId::new(2);
+
+        merchant.owned_facilities.insert(FacilityHandle {
+            settlement: a,
+            key: facility_key_from_u64(10),
+        });
+
+        assert!(merchant.can_stockpile_at(a));
+        assert!(!merchant.can_stockpile_at(b));
     }
 }

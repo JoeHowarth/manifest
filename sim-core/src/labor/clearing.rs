@@ -287,6 +287,17 @@ fn to_orders(bids: &[LaborBid], asks: &[LaborAsk], skill: SkillId) -> Vec<crate:
     orders
 }
 
+fn select_discrete_order_ids(fills: &[&crate::market::Fill]) -> Vec<u64> {
+    let target_units = (fills.iter().map(|f| f.quantity).sum::<f64>() + 1e-9).floor() as usize;
+    let mut ranked: Vec<(u64, f64)> = fills.iter().map(|f| (f.order_id, f.quantity)).collect();
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap().then_with(|| a.0.cmp(&b.0)));
+    ranked
+        .into_iter()
+        .take(target_units)
+        .map(|(order_id, _)| order_id)
+        .collect()
+}
+
 /// Clear labor markets sequentially by wage EMA (highest first)
 pub fn clear_labor_markets(
     skills: &[SkillDef],
@@ -359,43 +370,40 @@ pub fn clear_labor_markets(
                 break;
             };
 
-            // Check which facilities can't afford fills at clearing price
+            // Check which facilities can't afford discrete fills at clearing price
             let buy_fills: Vec<_> = result
                 .fills
                 .iter()
                 .filter(|f| matches!(f.side, Side::Buy))
                 .collect();
+            let selected_buy_order_ids = select_discrete_order_ids(&buy_fills);
 
-            // Calculate cumulative cost per facility from all their fills
-            let mut facility_costs: HashMap<FacilityKey, f64> = HashMap::new();
-            for buy_fill in &buy_fills {
-                let bid = skill_bids
-                    .iter()
-                    .find(|b| b.id == buy_fill.order_id)
-                    .unwrap();
-                *facility_costs.entry(bid.facility_id).or_insert(0.0) += wage;
+            // Calculate cumulative cost per facility from selected discrete fills
+            let mut selected_bid_ids_by_facility: HashMap<FacilityKey, Vec<u64>> = HashMap::new();
+            for bid_id in &selected_buy_order_ids {
+                let bid = skill_bids.iter().find(|b| b.id == *bid_id).unwrap();
+                selected_bid_ids_by_facility
+                    .entry(bid.facility_id)
+                    .or_default()
+                    .push(bid.id);
             }
 
-            // Find bids from facilities that exceed budget
+            // Find selected bids from facilities that exceed budget and remove
+            // lowest-priority selected bids (highest order id) first.
             let mut infeasible_bids = Vec::new();
-            for buy_fill in &buy_fills {
-                let bid = skill_bids
-                    .iter()
-                    .find(|b| b.id == buy_fill.order_id)
-                    .unwrap();
-
-                let budget = remaining_budgets
-                    .get(&bid.facility_id)
-                    .copied()
-                    .unwrap_or(0.0);
-                let total_cost = *facility_costs.get(&bid.facility_id).unwrap();
-
-                // If total cost exceeds budget, mark the lowest-priority bid as infeasible
-                // (we process in order, so later bids get removed first)
-                if total_cost > budget {
-                    infeasible_bids.push(bid.id);
-                    // Reduce tracked cost so we keep one bid if budget allows at least one
-                    *facility_costs.get_mut(&bid.facility_id).unwrap() -= wage;
+            for (facility_id, mut selected_ids) in selected_bid_ids_by_facility {
+                let budget = remaining_budgets.get(&facility_id).copied().unwrap_or(0.0);
+                let mut total_cost = selected_ids.len() as f64 * wage;
+                if total_cost <= budget + 1e-9 {
+                    continue;
+                }
+                selected_ids.sort_unstable();
+                while total_cost > budget + 1e-9 {
+                    let Some(removed_bid_id) = selected_ids.pop() else {
+                        break;
+                    };
+                    infeasible_bids.push(removed_bid_id);
+                    total_cost -= wage;
                 }
             }
 
@@ -415,18 +423,38 @@ pub fn clear_labor_markets(
                 .iter()
                 .filter(|f| matches!(f.side, Side::Sell))
                 .collect();
+            let selected_sell_order_ids = select_discrete_order_ids(&sell_fills);
 
-            // Pair them up (assumes 1:1 quantity fills)
-            for (buy_fill, sell_fill) in buy_fills.iter().zip(sell_fills.iter()) {
-                let bid = skill_bids
-                    .iter()
-                    .find(|b| b.id == buy_fill.order_id)
-                    .unwrap();
-                let ask = skill_asks
-                    .iter()
-                    .find(|a| a.id == sell_fill.order_id)
-                    .unwrap();
+            let selected_buy_ids: HashSet<u64> = selected_buy_order_ids.into_iter().collect();
+            let selected_sell_ids: HashSet<u64> = selected_sell_order_ids.into_iter().collect();
 
+            let mut selected_bids: Vec<&LaborBid> = skill_bids
+                .iter()
+                .copied()
+                .filter(|b| selected_buy_ids.contains(&b.id))
+                .collect();
+            selected_bids.sort_by(|a, b| {
+                b.max_wage
+                    .partial_cmp(&a.max_wage)
+                    .unwrap()
+                    .then_with(|| a.id.cmp(&b.id))
+            });
+
+            let mut selected_asks: Vec<&LaborAsk> = skill_asks
+                .iter()
+                .copied()
+                .filter(|a| selected_sell_ids.contains(&a.id))
+                .collect();
+            selected_asks.sort_by(|a, b| {
+                a.min_wage
+                    .partial_cmp(&b.min_wage)
+                    .unwrap()
+                    .then_with(|| a.worker_id.cmp(&b.worker_id))
+                    .then_with(|| a.id.cmp(&b.id))
+            });
+
+            // Pair according to explicit deterministic policy.
+            for (bid, ask) in selected_bids.into_iter().zip(selected_asks.into_iter()) {
                 // Deduct from facility budget
                 if let Some(budget) = remaining_budgets.get_mut(&bid.facility_id) {
                     *budget -= wage;
@@ -1138,6 +1166,44 @@ mod tests {
             last_hires[0] && last_hires[1] && last_hires[2],
             "Top 3 facilities should still hire: {:?}",
             last_hires
+        );
+    }
+
+    #[test]
+    fn discrete_fill_selection_uses_quantity_then_order_id() {
+        use crate::market::{Fill, Side};
+
+        let fills = [Fill {
+                order_id: 30,
+                agent_id: 1,
+                good: 1,
+                side: Side::Buy,
+                quantity: 0.6,
+                price: 5.0,
+            },
+            Fill {
+                order_id: 20,
+                agent_id: 1,
+                good: 1,
+                side: Side::Buy,
+                quantity: 0.8,
+                price: 5.0,
+            },
+            Fill {
+                order_id: 10,
+                agent_id: 1,
+                good: 1,
+                side: Side::Buy,
+                quantity: 0.6,
+                price: 5.0,
+            }];
+        let refs: Vec<&Fill> = fills.iter().collect();
+
+        let selected = select_discrete_order_ids(&refs);
+        assert_eq!(
+            selected,
+            vec![20, 10],
+            "select highest fill quantity first; break ties by order id"
         );
     }
 }

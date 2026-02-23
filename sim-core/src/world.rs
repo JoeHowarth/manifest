@@ -1020,8 +1020,9 @@ impl World {
             }
         }
 
-        let merchant_ids: Vec<MerchantId> =
+        let mut merchant_ids: Vec<MerchantId> =
             settlement.owner_facility_counts.keys().copied().collect();
+        merchant_ids.sort_by_key(|id| id.0);
         let mut extracted_merchants: Vec<(MerchantId, MerchantAgent)> = merchant_ids
             .iter()
             .filter_map(|id| merchants.remove(id).map(|m| (*id, m)))
