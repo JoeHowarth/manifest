@@ -49,3 +49,9 @@ Hard-won insights from debugging sessions. Read at session start, prune if over 
 - **Use windowed statistics for equilibrium analysis, not sampled rows.** Split long runs (10k ticks) into 1000-tick windows. Compute mean/std of price, population, employment, merchant grain per window. Linear regression slope over the last 5000 ticks is the key equilibrium diagnostic — near-zero slope = stable. Also count crash events (employment=0) per window to detect limit cycles vs transients. A 200-tick run looked like a crash; at 10k ticks the same system was clearly stable.
 
 - **Always test at multiple timescales.** A 500-tick run showed what looked like a non-equilibrium slow drift. At 10k ticks, the same parameters produced a clear stable equilibrium with near-zero trends. Short runs can be misleading due to startup transients and slow EMA convergence.
+
+## Runtime Correctness
+
+- **Labor skill discovery must come from runtime state, not seeded EMAs.** If the skill universe is built only from `wage_ema`, fresh settlements can deadlock forever (no bids, no hires, no wage updates). Include pop skills + recipe-required skills + existing EMA keys, then seed missing wage EMAs deterministically.
+
+- **Shared-owner labor budgets must be enforced globally in the labor phase.** Per-facility budget checks with one shared merchant wallet can create ghost employment and order effects. Clearing can propose assignments per settlement, but final payable assignment selection must reserve owner currency across all settlements before committing employment/wage state.
