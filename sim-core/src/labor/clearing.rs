@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::agents::Pop;
 use crate::market::{PriceBias, clear_single_market};
 use crate::production::Facility;
-use crate::types::{FacilityKey, Price, facility_key_u64};
+use crate::types::{AgentId, FacilityKey, Price, facility_key_u64};
 
 use super::production_fn::ProductionFn;
 use super::skills::{SkillDef, SkillId, Worker};
@@ -265,7 +265,7 @@ fn to_orders(bids: &[LaborBid], asks: &[LaborAsk], skill: SkillId) -> Vec<crate:
     for bid in bids.iter().filter(|b| b.skill == skill) {
         orders.push(Order {
             id: bid.id,
-            agent_id: facility_key_u64(bid.facility_id),
+            agent_id: AgentId::Outside(facility_key_u64(bid.facility_id)),
             good: skill.0,
             side: Side::Buy,
             quantity: 1.0,
@@ -276,7 +276,7 @@ fn to_orders(bids: &[LaborBid], asks: &[LaborAsk], skill: SkillId) -> Vec<crate:
     for ask in asks.iter().filter(|a| a.skill == skill) {
         orders.push(Order {
             id: ask.id,
-            agent_id: ask.worker_id,
+            agent_id: AgentId::Outside(ask.worker_id),
             good: skill.0,
             side: Side::Sell,
             quantity: 1.0,
@@ -490,20 +490,6 @@ pub fn update_wage_emas(wage_emas: &mut HashMap<SkillId, Price>, result: &LaborM
     for (skill, wage) in &result.clearing_wages {
         let ema = wage_emas.entry(*skill).or_insert(*wage);
         *ema = 0.7 * *ema + 0.3 * wage;
-    }
-}
-
-/// Apply labor assignments to facilities
-pub fn apply_assignments(facilities: &mut [(FacilityKey, Facility)], result: &LaborMarketResult) {
-    for assignment in &result.assignments {
-        if let Some(facility) = facilities
-            .iter_mut()
-            .find(|(key, _)| *key == assignment.facility_id)
-            .map(|(_, f)| f)
-        {
-            facility.currency -= assignment.wage;
-            *facility.workers.entry(assignment.skill).or_insert(0) += 1;
-        }
     }
 }
 
@@ -1173,9 +1159,10 @@ mod tests {
     fn discrete_fill_selection_uses_quantity_then_order_id() {
         use crate::market::{Fill, Side};
 
-        let fills = [Fill {
+        let fills = [
+            Fill {
                 order_id: 30,
-                agent_id: 1,
+                agent_id: AgentId::Outside(1),
                 good: 1,
                 side: Side::Buy,
                 quantity: 0.6,
@@ -1183,7 +1170,7 @@ mod tests {
             },
             Fill {
                 order_id: 20,
-                agent_id: 1,
+                agent_id: AgentId::Outside(1),
                 good: 1,
                 side: Side::Buy,
                 quantity: 0.8,
@@ -1191,12 +1178,13 @@ mod tests {
             },
             Fill {
                 order_id: 10,
-                agent_id: 1,
+                agent_id: AgentId::Outside(1),
                 good: 1,
                 side: Side::Buy,
                 quantity: 0.6,
                 price: 5.0,
-            }];
+            },
+        ];
         let refs: Vec<&Fill> = fills.iter().collect();
 
         let selected = select_discrete_order_ids(&refs);

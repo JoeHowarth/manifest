@@ -123,7 +123,7 @@ pub use consumption::{compute_consumption, greedy_consume};
 // Labor
 pub use labor::{
     Assignment, ComplementaryProductionFn, LaborAsk, LaborBid, LaborMarketResult, ProductionFn,
-    SkillDef, SkillId, SubsistenceReservationConfig, Worker, WorkerId, apply_assignments,
+    SkillDef, SkillId, SubsistenceReservationConfig, Worker, WorkerId,
     build_subsistence_reservation_ladder, clear_labor_markets, generate_facility_bids,
     generate_pop_asks_with_min_wage, generate_worker_asks, update_wage_emas,
 };

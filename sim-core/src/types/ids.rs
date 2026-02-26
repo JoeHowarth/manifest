@@ -5,7 +5,6 @@ use slotmap::{Key, new_key_type};
 // === TYPE ALIASES ===
 
 pub type GoodId = u32;
-pub type AgentId = u64;
 pub type Price = f64;
 pub type Quantity = f64;
 
@@ -32,6 +31,23 @@ impl MerchantId {
 // Canonical runtime identities for settlement-local arenas.
 new_key_type! { pub struct PopKey; }
 new_key_type! { pub struct FacilityKey; }
+
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
+pub enum AgentId {
+    Pop(PopKey),
+    Merchant(MerchantId),
+    Outside(u64),
+}
+
+impl AgentId {
+    pub fn stable_u64(self) -> u64 {
+        match self {
+            Self::Pop(key) => key.data().as_ffi() & ((1u64 << 62) - 1),
+            Self::Merchant(id) => (1u64 << 62) | u64::from(id.0),
+            Self::Outside(raw) => (1u64 << 63) | (raw & ((1u64 << 63) - 1)),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PopHandle {

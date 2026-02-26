@@ -548,10 +548,14 @@ pub fn apply_fill_merchant(merchant: &mut MerchantAgent, settlement: SettlementI
 mod tests {
     use super::*;
 
+    fn aid(id: u64) -> AgentId {
+        AgentId::Outside(id)
+    }
+
     fn make_buy(id: u64, agent_id: u64, qty: f64, price: f64) -> Order {
         Order {
             id,
-            agent_id,
+            agent_id: aid(agent_id),
             good: 1,
             side: Side::Buy,
             quantity: qty,
@@ -562,7 +566,7 @@ mod tests {
     fn make_sell(id: u64, agent_id: u64, qty: f64, price: f64) -> Order {
         Order {
             id,
-            agent_id,
+            agent_id: aid(agent_id),
             good: 1,
             side: Side::Sell,
             quantity: qty,
@@ -608,14 +612,14 @@ mod tests {
         let agent_1_fills: f64 = result
             .fills
             .iter()
-            .filter(|f| f.agent_id == 1 && matches!(f.side, Side::Buy))
+            .filter(|f| f.agent_id == aid(1) && matches!(f.side, Side::Buy))
             .map(|f| f.quantity)
             .sum();
 
         let agent_2_fills: f64 = result
             .fills
             .iter()
-            .filter(|f| f.agent_id == 2 && matches!(f.side, Side::Buy))
+            .filter(|f| f.agent_id == aid(2) && matches!(f.side, Side::Buy))
             .map(|f| f.quantity)
             .sum();
 
@@ -659,8 +663,8 @@ mod tests {
         ];
 
         let mut budgets = HashMap::new();
-        budgets.insert(1, 5.0); // agent 1 can only spend 5.0
-        budgets.insert(2, 1000.0); // seller has plenty
+        budgets.insert(aid(1), 5.0); // agent 1 can only spend 5.0
+        budgets.insert(aid(2), 1000.0); // seller has plenty
 
         let result = clear_single_market(1, &orders, Some(&budgets), None, PriceBias::FavorSellers);
 
@@ -676,7 +680,7 @@ mod tests {
         let buyer_fills: f64 = result
             .fills
             .iter()
-            .filter(|f| f.agent_id == 1 && matches!(f.side, Side::Buy))
+            .filter(|f| f.agent_id == aid(1) && matches!(f.side, Side::Buy))
             .map(|f| f.quantity)
             .sum();
 
@@ -715,9 +719,9 @@ mod tests {
 
         let mut budgets = HashMap::new();
         for buyer_id in 1..=10u64 {
-            budgets.insert(buyer_id, 1.0); // each buyer has budget 1.0
+            budgets.insert(aid(buyer_id), 1.0); // each buyer has budget 1.0
         }
-        budgets.insert(100, 10000.0); // seller
+        budgets.insert(aid(100), 10000.0); // seller
 
         let result = clear_single_market(1, &orders, Some(&budgets), None, PriceBias::FavorSellers);
 
@@ -768,8 +772,8 @@ mod tests {
         ];
 
         let mut budgets = HashMap::new();
-        budgets.insert(1, 1.0); // agent 1 has budget 1.0
-        budgets.insert(2, 1000.0);
+        budgets.insert(aid(1), 1.0); // agent 1 has budget 1.0
+        budgets.insert(aid(2), 1000.0);
 
         let result = clear_single_market(1, &orders, Some(&budgets), None, PriceBias::FavorSellers);
 
@@ -788,7 +792,7 @@ mod tests {
         let agent_1_fills: f64 = result
             .fills
             .iter()
-            .filter(|f| f.agent_id == 1 && matches!(f.side, Side::Buy))
+            .filter(|f| f.agent_id == aid(1) && matches!(f.side, Side::Buy))
             .map(|f| f.quantity)
             .sum();
 
@@ -802,7 +806,7 @@ mod tests {
         let agent_1_cost: f64 = result
             .fills
             .iter()
-            .filter(|f| f.agent_id == 1 && matches!(f.side, Side::Buy))
+            .filter(|f| f.agent_id == aid(1) && matches!(f.side, Side::Buy))
             .map(|f| f.quantity * f.price)
             .sum();
 
@@ -825,11 +829,11 @@ mod tests {
         ];
 
         let mut budgets = HashMap::new();
-        budgets.insert(1, 1000.0); // buyer has plenty of budget
-        budgets.insert(2, 1000.0);
+        budgets.insert(aid(1), 1000.0); // buyer has plenty of budget
+        budgets.insert(aid(2), 1000.0);
 
         let mut inventories = HashMap::new();
-        inventories.insert(2, 30.0); // seller only has 30 units in stock
+        inventories.insert(aid(2), 30.0); // seller only has 30 units in stock
 
         let result = clear_single_market(
             1,
@@ -851,7 +855,7 @@ mod tests {
         let seller_fills: f64 = result
             .fills
             .iter()
-            .filter(|f| f.agent_id == 2 && matches!(f.side, Side::Sell))
+            .filter(|f| f.agent_id == aid(2) && matches!(f.side, Side::Sell))
             .map(|f| f.quantity)
             .sum();
 
@@ -865,7 +869,7 @@ mod tests {
         let buyer_fills: f64 = result
             .fills
             .iter()
-            .filter(|f| f.agent_id == 1 && matches!(f.side, Side::Buy))
+            .filter(|f| f.agent_id == aid(1) && matches!(f.side, Side::Buy))
             .map(|f| f.quantity)
             .sum();
 
@@ -888,11 +892,11 @@ mod tests {
         ];
 
         let mut budgets = HashMap::new();
-        budgets.insert(1, 10000.0);
-        budgets.insert(2, 10000.0);
+        budgets.insert(aid(1), 10000.0);
+        budgets.insert(aid(2), 10000.0);
 
         let mut inventories = HashMap::new();
-        inventories.insert(2, 50.0); // seller only has 50 total
+        inventories.insert(aid(2), 50.0); // seller only has 50 total
 
         let result = clear_single_market(
             1,
@@ -908,7 +912,7 @@ mod tests {
         let seller_fills: f64 = result
             .fills
             .iter()
-            .filter(|f| f.agent_id == 2 && matches!(f.side, Side::Sell))
+            .filter(|f| f.agent_id == aid(2) && matches!(f.side, Side::Sell))
             .map(|f| f.quantity)
             .sum();
 

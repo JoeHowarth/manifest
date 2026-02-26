@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::market::{Order, Side};
 use crate::types::{AgentId, GoodId, Price, Quantity, SettlementId};
 
-pub const OUTSIDE_BASE_AGENT_ID: AgentId = u64::MAX;
+pub const OUTSIDE_BASE_AGENT_ID: u64 = u64::MAX;
 
 /// EMA blending rate for depth multiplier toward target each tick.
 pub const DEPTH_RESPONSE_ALPHA: f64 = 0.1;
@@ -126,12 +126,12 @@ pub struct OutsideMarketOrders {
 
 fn import_agent_id(good: GoodId) -> AgentId {
     let offset = u64::from(good).saturating_mul(2).saturating_add(1);
-    OUTSIDE_BASE_AGENT_ID.saturating_sub(offset)
+    AgentId::Outside(OUTSIDE_BASE_AGENT_ID.saturating_sub(offset))
 }
 
 fn export_agent_id(good: GoodId) -> AgentId {
     let offset = u64::from(good).saturating_mul(2).saturating_add(2);
-    OUTSIDE_BASE_AGENT_ID.saturating_sub(offset)
+    AgentId::Outside(OUTSIDE_BASE_AGENT_ID.saturating_sub(offset))
 }
 
 /// Update the trade depth multiplier based on price deviation from world price.

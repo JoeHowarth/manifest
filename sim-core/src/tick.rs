@@ -321,7 +321,7 @@ pub fn run_settlement_tick(
 
     for (pop_key, pop) in pops.iter() {
         let mut orders =
-            generate_demand_curve_orders(pop_key_u64(*pop_key), pop, good_profiles, price_ema);
+            generate_demand_curve_orders(AgentId::Pop(*pop_key), pop, good_profiles, price_ema);
         for o in &mut orders {
             o.id = next_order_id;
             next_order_id += 1;
@@ -337,7 +337,7 @@ pub fn run_settlement_tick(
                     tick = tick,
                     settlement_id = settlement.0,
                     order_id = o.id,
-                    agent_id = o.agent_id,
+                    agent_id = o.agent_id.stable_u64(),
                     agent_type = "pop",
                     good_id = o.good,
                     side = side_str,
@@ -366,7 +366,7 @@ pub fn run_settlement_tick(
                     tick = tick,
                     settlement_id = settlement.0,
                     order_id = o.id,
-                    agent_id = o.agent_id,
+                    agent_id = o.agent_id.stable_u64(),
                     agent_type = "merchant",
                     good_id = o.good,
                     side = side_str,
@@ -396,7 +396,7 @@ pub fn run_settlement_tick(
                 tick = tick,
                 settlement_id = settlement.0,
                 order_id = order.id,
-                agent_id = order.agent_id,
+                agent_id = order.agent_id.stable_u64(),
                 agent_type = "outside",
                 good_id = order.good,
                 side = side_str,
@@ -413,8 +413,12 @@ pub fn run_settlement_tick(
     // Extra coins accumulate as savings
     let mut budgets: HashMap<AgentId, f64> = pops
         .iter()
-        .map(|(k, p)| (pop_key_u64(*k), p.income_ema.min(p.currency)))
-        .chain(merchants.iter().map(|m| (m.id.0 as u64, m.currency)))
+        .map(|(k, p)| (AgentId::Pop(*k), p.income_ema.min(p.currency)))
+        .chain(
+            merchants
+                .iter()
+                .map(|m| (AgentId::Merchant(m.id), m.currency)),
+        )
         .collect();
     for (agent, budget) in outside_market.budgets {
         budgets.insert(agent, budget);
@@ -431,7 +435,7 @@ pub fn run_settlement_tick(
                 .iter()
                 .map(|&g| (g, p.stocks.get(&g).copied().unwrap_or(0.0)))
                 .collect();
-            (pop_key_u64(*k), inv)
+            (AgentId::Pop(*k), inv)
         })
         .chain(merchants.iter().map(|m| {
             let inv: HashMap<GoodId, f64> = m
@@ -439,7 +443,7 @@ pub fn run_settlement_tick(
                 .get(&settlement)
                 .map(|stockpile| good_ids.iter().map(|&g| (g, stockpile.get(g))).collect())
                 .unwrap_or_default();
-            (m.id.0 as u64, inv)
+            (AgentId::Merchant(m.id), inv)
         }))
         .collect();
     for (agent, inv) in outside_market.inventories {
@@ -521,20 +525,22 @@ pub fn run_settlement_tick(
             continue;
         }
 
-        let is_pop = if let Some((_, pop)) = pops
-            .iter_mut()
-            .find(|(k, _)| pop_key_u64(*k) == fill.agent_id)
-        {
-            market::apply_fill(pop, fill);
-            true
-        } else if let Some(merchant) = merchants
-            .iter_mut()
-            .find(|m| (m.id.0 as u64) == fill.agent_id)
-        {
-            market::apply_fill_merchant(merchant, settlement, fill);
-            false
-        } else {
-            false
+        let is_pop = match fill.agent_id {
+            AgentId::Pop(pop_id) => {
+                if let Some((_, pop)) = pops.iter_mut().find(|(k, _)| *k == pop_id) {
+                    market::apply_fill(pop, fill);
+                    true
+                } else {
+                    false
+                }
+            }
+            AgentId::Merchant(merchant_id) => {
+                if let Some(merchant) = merchants.iter_mut().find(|m| m.id == merchant_id) {
+                    market::apply_fill_merchant(merchant, settlement, fill);
+                }
+                false
+            }
+            AgentId::Outside(_) => false,
         };
 
         #[cfg(feature = "instrument")]
@@ -548,7 +554,7 @@ pub fn run_settlement_tick(
                 target: "fill",
                 tick = tick,
                 settlement_id = settlement.0,
-                agent_id = fill.agent_id,
+                agent_id = fill.agent_id.stable_u64(),
                 agent_type = agent_type,
                 good_id = fill.good,
                 side = side_str,

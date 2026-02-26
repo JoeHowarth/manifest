@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::agents::Stockpile;
 use crate::market::{Order, Side};
-use crate::types::{FacilityHandle, GoodId, MerchantId, Price, SettlementId};
+use crate::types::{AgentId, FacilityHandle, GoodId, MerchantId, Price, SettlementId};
 
 // === SUPPLY CURVE CONSTANTS ===
 
@@ -135,7 +135,7 @@ impl MerchantAgent {
                 if sell_qty > 0.001 {
                     orders.push(Order {
                         id: 0, // assigned later
-                        agent_id: self.id.0 as u64,
+                        agent_id: AgentId::Merchant(self.id),
                         good,
                         side: Side::Sell,
                         quantity: sell_qty,
