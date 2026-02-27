@@ -69,9 +69,8 @@ impl World {
 
             for &skill in recipe.workers.keys() {
                 let entry = skill_mvps.entry(skill).or_insert(0.0);
-                if per_worker > *entry {
-                    *entry = per_worker;
-                }
+                // Keep the max across recipes, not average
+                *entry = entry.max(per_worker);
             }
         }
 
