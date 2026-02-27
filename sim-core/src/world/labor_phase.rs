@@ -29,37 +29,53 @@ impl World {
             .collect()
     }
 
-    fn facility_recipe_skills_and_mvp(
+    /// Compute per-skill MVPs across all recipes a facility can run.
+    ///
+    /// For each recipe, the per-worker value is `output_value / total_workers`.
+    /// Each skill gets the best (highest) per-worker value across all recipes
+    /// that use it. This lets facilities bid differently for high-value vs
+    /// low-value skills and ensures secondary recipes' labor needs are visible
+    /// to the labor market.
+    fn facility_skill_mvps(
         settlement: &SettlementState,
         facility: &Facility,
         recipes: &[Recipe],
-    ) -> (Vec<SkillId>, Price) {
-        let Some(recipe) = facility
-            .recipe_priorities
-            .iter()
-            .find_map(|rid| recipes.iter().find(|r| r.id == *rid))
-        else {
-            return (Vec::new(), 1.0);
-        };
+    ) -> HashMap<SkillId, Price> {
+        let mut skill_mvps: HashMap<SkillId, Price> = HashMap::new();
 
-        let mut relevant_skills: Vec<SkillId> = recipe.workers.keys().copied().collect();
-        relevant_skills.sort_by_key(|s| s.0);
+        for recipe_id in &facility.recipe_priorities {
+            let Some(recipe) = recipes.iter().find(|r| r.id == *recipe_id) else {
+                continue;
+            };
+            if !recipe.can_run_at(facility.facility_type) {
+                continue;
+            }
 
-        let total_workers: u32 = recipe.workers.values().sum();
-        if total_workers == 0 {
-            return (relevant_skills, 1.0);
+            let total_workers: u32 = recipe.workers.values().sum();
+            if total_workers == 0 {
+                continue;
+            }
+
+            let output_value: Price = recipe
+                .outputs
+                .iter()
+                .map(|(good_id, qty)| {
+                    let price = settlement.price_ema.get(good_id).copied().unwrap_or(1.0);
+                    qty * price
+                })
+                .sum();
+
+            let per_worker = output_value / total_workers as f64;
+
+            for &skill in recipe.workers.keys() {
+                let entry = skill_mvps.entry(skill).or_insert(0.0);
+                if per_worker > *entry {
+                    *entry = per_worker;
+                }
+            }
         }
 
-        let output_value: Price = recipe
-            .outputs
-            .iter()
-            .map(|(good_id, qty)| {
-                let price = settlement.price_ema.get(good_id).copied().unwrap_or(1.0);
-                qty * price
-            })
-            .sum();
-
-        (relevant_skills, output_value / total_workers as f64)
+        skill_mvps
     }
 
     pub(super) fn run_labor_phase_all_settlements(
@@ -312,21 +328,24 @@ impl World {
 
             let max_workers = facility.capacity.min(50);
 
-            let (facility_skills, mvp) =
-                Self::facility_recipe_skills_and_mvp(settlement, facility, recipes);
+            let skill_mvps =
+                Self::facility_skill_mvps(settlement, facility, recipes);
 
-            for skill_id in facility_skills {
-                let wage_ema = settlement.wage_ema.get(&skill_id).copied().unwrap_or(1.0);
-                let adaptive_bid = bid_state.get_bid(skill_id, wage_ema);
-                let actual_bid = adaptive_bid.min(mvp);
-                facility_skill_bids.insert((facility_key, skill_id), (max_workers, mvp));
+            let mut skill_mvp_pairs: Vec<_> = skill_mvps.iter().collect();
+            skill_mvp_pairs.sort_by_key(|(s, _)| s.0);
+
+            for (skill_id, mvp) in skill_mvp_pairs {
+                let wage_ema = settlement.wage_ema.get(skill_id).copied().unwrap_or(1.0);
+                let adaptive_bid = bid_state.get_bid(*skill_id, wage_ema);
+                let actual_bid = adaptive_bid.min(*mvp);
+                facility_skill_bids.insert((facility_key, *skill_id), (max_workers, *mvp));
 
                 for _ in 0..max_workers {
-                    if mvp > 0.0 {
+                    if *mvp > 0.0 {
                         bids.push(LaborBid {
                             id: next_bid_id,
                             facility_id: facility_key,
-                            skill: skill_id,
+                            skill: *skill_id,
                             max_wage: actual_bid,
                         });
                         next_bid_id += 1;
