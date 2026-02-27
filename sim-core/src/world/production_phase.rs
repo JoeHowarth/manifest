@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::merchant::PRODUCTION_EMA_RETAIN;
 
 impl World {
     pub(super) fn run_production_phase_settlement(
@@ -53,9 +54,23 @@ impl World {
             }
         }
 
-        for ((merchant_id, good_id), total_qty) in production_totals {
+        // Record production EMA for goods that were produced this tick.
+        for (&(merchant_id, good_id), &total_qty) in &production_totals {
             if let Some(merchant) = merchants.get_mut(&merchant_id) {
                 merchant.record_production(settlement_id, good_id, total_qty);
+            }
+        }
+
+        // Decay production EMA for goods NOT produced this tick.
+        // 0.7 * ema + 0.3 * 0.0 = 0.7 * ema
+        for merchant in merchants.values_mut() {
+            if let Some(goods_ema) = merchant.production_ema.get_mut(&settlement_id) {
+                goods_ema.retain(|good, ema| {
+                    if !production_totals.contains_key(&(merchant.id, *good)) {
+                        *ema *= PRODUCTION_EMA_RETAIN;
+                    }
+                    *ema > 0.001 // prune near-zero entries
+                });
             }
         }
     }
