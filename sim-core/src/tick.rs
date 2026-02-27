@@ -457,26 +457,41 @@ pub fn run_settlement_tick(
     }
 
     // 5. MARKET CLEARING
-    let price_bias = if outside_market.roles.is_empty() {
-        market::PriceBias::FavorSellers
+    let per_good_bias: HashMap<GoodId, market::PriceBias> = if outside_market.roles.is_empty() {
+        good_ids
+            .iter()
+            .map(|&g| (g, market::PriceBias::FavorSellers))
+            .collect()
     } else {
-        // With outside ladders active, adapt tie breaks to local imbalance:
-        // shortage -> favor buyers (import-cap preserving), surplus -> favor
-        // sellers (export-floor preserving), near-balance -> neutral.
-        let (inside_buy, inside_sell) = all_orders
+        // With outside ladders active, adapt tie breaks per-good to local
+        // imbalance: shortage -> favor buyers (import-cap preserving),
+        // surplus -> favor sellers (export-floor preserving).
+        let mut per_good_buy: HashMap<GoodId, f64> = HashMap::new();
+        let mut per_good_sell: HashMap<GoodId, f64> = HashMap::new();
+        for o in all_orders
             .iter()
             .filter(|o| !outside_market.roles.contains_key(&o.agent_id))
-            .fold((0.0, 0.0), |(b, s), o| match o.side {
-                Side::Buy => (b + o.quantity, s),
-                Side::Sell => (b, s + o.quantity),
-            });
-        if inside_buy > inside_sell + 1e-12 {
-            market::PriceBias::FavorBuyers
-        } else if inside_sell > inside_buy + 1e-12 {
-            market::PriceBias::FavorSellers
-        } else {
-            market::PriceBias::Neutral
+        {
+            match o.side {
+                Side::Buy => *per_good_buy.entry(o.good).or_insert(0.0) += o.quantity,
+                Side::Sell => *per_good_sell.entry(o.good).or_insert(0.0) += o.quantity,
+            }
         }
+        good_ids
+            .iter()
+            .map(|&g| {
+                let buy = per_good_buy.get(&g).copied().unwrap_or(0.0);
+                let sell = per_good_sell.get(&g).copied().unwrap_or(0.0);
+                let bias = if buy > sell + 1e-12 {
+                    market::PriceBias::FavorBuyers
+                } else if sell > buy + 1e-12 {
+                    market::PriceBias::FavorSellers
+                } else {
+                    market::PriceBias::Neutral
+                };
+                (g, bias)
+            })
+            .collect()
     };
 
     let result = market::clear_multi_market(
@@ -485,7 +500,7 @@ pub fn run_settlement_tick(
         &budgets,
         Some(&seller_inventories),
         20,
-        price_bias,
+        &per_good_bias,
     );
 
     // 5. APPLY FILLS

@@ -405,10 +405,12 @@ impl World {
             &facility_budgets,
         );
 
+        let unique_workers = asks.iter().map(|a| a.worker_id).collect::<HashSet<_>>().len() as u32;
+
         Some(PreparedLaborSettlement {
             skills,
             facility_skill_bids,
-            total_workers: asks.len() as u32,
+            total_workers: unique_workers,
             pop_keys,
             result,
         })

@@ -417,7 +417,7 @@ pub fn clear_multi_market(
     initial_budgets: &HashMap<AgentId, f64>,
     seller_inventories: Option<&HashMap<AgentId, HashMap<GoodId, f64>>>,
     max_iterations: u32,
-    bias: PriceBias,
+    per_good_bias: &HashMap<GoodId, PriceBias>,
 ) -> MultiMarketResult {
     let mut iteration = 0;
 
@@ -439,6 +439,11 @@ pub fn clear_multi_market(
                     })
                     .collect()
             });
+
+            let bias = per_good_bias
+                .get(good)
+                .copied()
+                .unwrap_or(PriceBias::FavorSellers);
 
             // Pass budgets and inventories to clear_single_market for constraint-aware price discovery
             let result = clear_single_market(
