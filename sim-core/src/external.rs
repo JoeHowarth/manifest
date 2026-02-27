@@ -173,7 +173,10 @@ pub fn generate_outside_market_orders(
 
     let mut out = OutsideMarketOrders::default();
 
-    for (&good, anchor) in &config.anchors {
+    let mut goods: Vec<GoodId> = config.anchors.keys().copied().collect();
+    goods.sort_unstable();
+    for good in goods {
+        let anchor = &config.anchors[&good];
         let tiers = anchor.tiers.max(1);
         let mult = depth_multipliers.get(&good).copied().unwrap_or(1.0);
         let max_depth = (anchor.base_depth + anchor.depth_per_pop * pop_count as f64) * mult;

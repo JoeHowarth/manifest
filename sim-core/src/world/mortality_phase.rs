@@ -20,8 +20,7 @@ impl World {
 
         let mut rng = self.rng.clone();
 
-        let mut pop_keys: Vec<PopKey> = settlement.pops.keys().collect();
-        pop_keys.sort_by_key(|k| pop_key_u64(*k));
+        let pop_keys = crate::determinism::sorted_pop_keys(settlement.pops.keys());
 
         let mut outcomes: Vec<(PopKey, MortalityOutcome, f64)> = Vec::with_capacity(pop_keys.len());
         for pop_key in &pop_keys {
@@ -99,8 +98,7 @@ impl World {
             }
 
             use rand::seq::SliceRandom;
-            let mut heirs: Vec<PopKey> = settlement.pops.keys().collect();
-            heirs.sort_by_key(|k| pop_key_u64(*k));
+            let mut heirs = crate::determinism::sorted_pop_keys(settlement.pops.keys());
             heirs.shuffle(&mut rng);
             heirs.truncate(3);
             let n = heirs.len();

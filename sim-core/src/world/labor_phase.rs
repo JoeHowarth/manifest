@@ -110,16 +110,24 @@ impl World {
                     if affected { Some(*settlement_id) } else { None }
                 })
                 .collect();
+            let impacted_settlement_ids =
+                crate::determinism::sorted_settlement_ids(impacted_settlements.iter().copied());
 
             let mut reclear_owner_budgets = initial_owner_budgets.clone();
-            for (settlement_id, assignments) in &final_payable_by_settlement {
-                if impacted_settlements.contains(settlement_id) {
+            let payable_settlement_ids = crate::determinism::sorted_settlement_ids(
+                final_payable_by_settlement.keys().copied(),
+            );
+            for settlement_id in payable_settlement_ids {
+                let Some(assignments) = final_payable_by_settlement.get(&settlement_id) else {
+                    continue;
+                };
+                if impacted_settlements.contains(&settlement_id) {
                     continue;
                 }
                 for assignment in assignments {
                     let Some(owner_id) = self
                         .settlements
-                        .get(settlement_id)
+                        .get(&settlement_id)
                         .and_then(|s| s.facilities.get(assignment.facility_id))
                         .map(|f| f.owner)
                     else {
@@ -130,14 +138,14 @@ impl World {
                 }
             }
 
-            for settlement_id in &impacted_settlements {
+            for settlement_id in &impacted_settlement_ids {
                 final_prepared.remove(settlement_id);
                 final_payable_by_settlement.remove(settlement_id);
             }
 
             let mut impacted_prepared: HashMap<SettlementId, PreparedLaborSettlement> =
                 HashMap::new();
-            for settlement_id in impacted_settlements {
+            for settlement_id in impacted_settlement_ids {
                 let Some(prepared_settlement) = self.prepare_labor_phase_settlement(
                     settlement_id,
                     recipes,
@@ -273,8 +281,7 @@ impl World {
         let mut bids: Vec<LaborBid> = Vec::new();
         let mut next_bid_id = 0u64;
 
-        let mut facility_keys: Vec<FacilityKey> = settlement.facilities.keys().collect();
-        facility_keys.sort_by_key(|k| facility_key_u64(*k));
+        let facility_keys = crate::determinism::sorted_facility_keys(settlement.facilities.keys());
 
         for facility_key in facility_keys {
             let Some(facility) = settlement.facilities.get(facility_key) else {
@@ -357,8 +364,7 @@ impl World {
 
         let mut asks = Vec::new();
         let mut next_ask_id = 0u64;
-        let mut pop_keys: Vec<PopKey> = settlement.pops.keys().collect();
-        pop_keys.sort_by_key(|k| pop_key_u64(*k));
+        let pop_keys = crate::determinism::sorted_pop_keys(settlement.pops.keys());
         for pop_key in &pop_keys {
             let Some(pop) = settlement.pops.get(*pop_key) else {
                 continue;
@@ -485,8 +491,8 @@ impl World {
         }
 
         let mut rng = self.rng.clone();
-        let mut bid_state_keys: Vec<FacilityKey> = settlement.facility_bid_states.keys().collect();
-        bid_state_keys.sort_by_key(|k| facility_key_u64(*k));
+        let bid_state_keys =
+            crate::determinism::sorted_facility_keys(settlement.facility_bid_states.keys());
         for facility_key in bid_state_keys {
             let my_merchant = settlement.facilities.get(facility_key).map(|f| f.owner);
             let my_workers = my_merchant

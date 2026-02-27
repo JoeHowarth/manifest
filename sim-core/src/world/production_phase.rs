@@ -12,8 +12,7 @@ impl World {
         };
 
         let mut production_totals: HashMap<(MerchantId, GoodId), f64> = HashMap::new();
-        let mut facility_keys: Vec<FacilityKey> = settlement.facilities.keys().collect();
-        facility_keys.sort_by_key(|k| facility_key_u64(*k));
+        let facility_keys = crate::determinism::sorted_facility_keys(settlement.facilities.keys());
 
         for facility_key in facility_keys {
             let (owner_id, quality_multiplier) = {

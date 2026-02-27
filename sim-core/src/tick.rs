@@ -231,6 +231,9 @@ pub fn run_settlement_tick(
     depth_multipliers: &HashMap<GoodId, f64>,
     subsistence_queue: Option<&[PopKey]>,
 ) -> market::MultiMarketResult {
+    pops.sort_by_key(|(k, _)| pop_key_u64(*k));
+    merchants.sort_by_key(|m| m.id.0);
+
     // 0. Production
 
     // 0.5 SUBSISTENCE PHASE (in-kind fallback for unemployed pops)
@@ -486,6 +489,17 @@ pub fn run_settlement_tick(
     );
 
     // 5. APPLY FILLS
+    let pop_index_by_agent: HashMap<AgentId, usize> = pops
+        .iter()
+        .enumerate()
+        .map(|(idx, (k, _))| (AgentId::Pop(*k), idx))
+        .collect();
+    let merchant_index_by_agent: HashMap<AgentId, usize> = merchants
+        .iter()
+        .enumerate()
+        .map(|(idx, m)| (AgentId::Merchant(m.id), idx))
+        .collect();
+
     let mut outside_flow_totals = outside_flow_totals;
     for fill in &result.fills {
         if let Some(role) = outside_market.roles.get(&fill.agent_id).copied() {
@@ -526,16 +540,18 @@ pub fn run_settlement_tick(
         }
 
         let is_pop = match fill.agent_id {
-            AgentId::Pop(pop_id) => {
-                if let Some((_, pop)) = pops.iter_mut().find(|(k, _)| *k == pop_id) {
+            AgentId::Pop(_) => {
+                if let Some(idx) = pop_index_by_agent.get(&fill.agent_id).copied() {
+                    let (_, pop) = &mut pops[idx];
                     market::apply_fill(pop, fill);
                     true
                 } else {
                     false
                 }
             }
-            AgentId::Merchant(merchant_id) => {
-                if let Some(merchant) = merchants.iter_mut().find(|m| m.id == merchant_id) {
+            AgentId::Merchant(_) => {
+                if let Some(idx) = merchant_index_by_agent.get(&fill.agent_id).copied() {
+                    let merchant = &mut merchants[idx];
                     market::apply_fill_merchant(merchant, settlement, fill);
                 }
                 false

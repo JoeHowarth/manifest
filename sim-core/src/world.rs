@@ -68,12 +68,10 @@ impl SettlementState {
         self.subsistence_queue.retain(|k| in_pops.contains(k));
 
         let queued: HashSet<PopKey> = self.subsistence_queue.iter().copied().collect();
-        let mut new_unemployed: Vec<PopKey> = self
-            .pops
-            .iter()
-            .filter_map(|(k, p)| (p.employed_at.is_none() && !queued.contains(&k)).then_some(k))
-            .collect();
-        new_unemployed.sort_by_key(|k| pop_key_u64(*k));
+        let new_unemployed =
+            crate::determinism::sorted_pop_keys(self.pops.iter().filter_map(|(k, p)| {
+                (p.employed_at.is_none() && !queued.contains(&k)).then_some(k)
+            }));
         self.subsistence_queue.extend(new_unemployed);
     }
 }
@@ -339,8 +337,8 @@ impl World {
         let pre_tick_snapshot = capture_world_flow_snapshot(self);
 
         let mut merchants = std::mem::take(&mut self.merchants);
-        let mut settlement_ids: Vec<SettlementId> = self.settlements.keys().copied().collect();
-        settlement_ids.sort_by_key(|id| id.0);
+        let settlement_ids =
+            crate::determinism::sorted_settlement_ids(self.settlements.keys().copied());
 
         self.run_labor_phase_all_settlements(&settlement_ids, recipes, &mut merchants);
 
