@@ -40,7 +40,7 @@ pub enum AgentId {
 }
 
 impl AgentId {
-    pub fn stable_u64(self) -> u64 {
+    pub(crate) fn stable_u64(self) -> u64 {
         match self {
             Self::Pop(key) => key.data().as_ffi() & ((1u64 << 62) - 1),
             Self::Merchant(id) => (1u64 << 62) | u64::from(id.0),

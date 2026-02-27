@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::market::{Order, Side};
 use crate::types::{AgentId, GoodId, Price, Quantity, SettlementId};
 
-pub const OUTSIDE_BASE_AGENT_ID: u64 = u64::MAX;
+const OUTSIDE_BASE_AGENT_ID: u64 = u64::MAX;
 
 /// EMA blending rate for depth multiplier toward target each tick.
 pub const DEPTH_RESPONSE_ALPHA: f64 = 0.1;

@@ -1,6 +1,6 @@
 use crate::types::{FacilityKey, MerchantId, PopKey, SettlementId, facility_key_u64, pop_key_u64};
 
-pub fn sorted_settlement_ids<I>(iter: I) -> Vec<SettlementId>
+pub(crate) fn sorted_settlement_ids<I>(iter: I) -> Vec<SettlementId>
 where
     I: IntoIterator<Item = SettlementId>,
 {
@@ -9,7 +9,7 @@ where
     ids
 }
 
-pub fn sorted_merchant_ids<I>(iter: I) -> Vec<MerchantId>
+pub(crate) fn sorted_merchant_ids<I>(iter: I) -> Vec<MerchantId>
 where
     I: IntoIterator<Item = MerchantId>,
 {
@@ -18,7 +18,7 @@ where
     ids
 }
 
-pub fn sorted_pop_keys<I>(iter: I) -> Vec<PopKey>
+pub(crate) fn sorted_pop_keys<I>(iter: I) -> Vec<PopKey>
 where
     I: IntoIterator<Item = PopKey>,
 {
@@ -27,7 +27,7 @@ where
     keys
 }
 
-pub fn sorted_facility_keys<I>(iter: I) -> Vec<FacilityKey>
+pub(crate) fn sorted_facility_keys<I>(iter: I) -> Vec<FacilityKey>
 where
     I: IntoIterator<Item = FacilityKey>,
 {
