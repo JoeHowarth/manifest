@@ -30,6 +30,8 @@ pub struct Pop {
     pub min_wage: Price,
     /// Current employment: facility this pop works at (if any)
     pub employed_at: Option<FacilityKey>,
+    /// Which skill this pop is currently employed under (if any)
+    pub employed_skill: Option<SkillId>,
 }
 
 impl Pop {
@@ -43,6 +45,7 @@ impl Pop {
             skills: HashSet::new(),
             min_wage: 1.0, // Default reservation wage
             employed_at: None,
+            employed_skill: None,
         }
     }
 

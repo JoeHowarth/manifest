@@ -539,6 +539,7 @@ impl World {
 
         for pop in settlement.pops.values_mut() {
             pop.employed_at = None;
+            pop.employed_skill = None;
         }
         for facility in settlement.facilities.values_mut() {
             facility.workers.clear();
@@ -579,6 +580,7 @@ impl World {
                 pop.currency += assignment.wage;
                 pop.record_income(assignment.wage);
                 pop.employed_at = Some(assignment.facility_id);
+                pop.employed_skill = Some(assignment.skill);
             }
 
             if let Some(facility) = settlement.facilities.get_mut(assignment.facility_id) {

@@ -73,6 +73,7 @@ impl World {
                             *qty = child_share;
                         }
                         child.employed_at = None;
+                        child.employed_skill = None;
                         children.push(child);
                     }
                 }
@@ -87,11 +88,15 @@ impl World {
 
             settlement.subsistence_queue.retain(|k| *k != pop_key);
 
-            if let Some(facility_key) = pop.employed_at
-                && let Some(facility) = settlement.facilities.get_mut(facility_key)
-            {
-                for skill in &pop.skills {
-                    if let Some(count) = facility.workers.get_mut(skill) {
+            if let Some(facility_key) = pop.employed_at {
+                debug_assert!(
+                    pop.employed_skill.is_some(),
+                    "pop has employed_at but no employed_skill"
+                );
+                if let Some(skill) = pop.employed_skill
+                    && let Some(facility) = settlement.facilities.get_mut(facility_key)
+                {
+                    if let Some(count) = facility.workers.get_mut(&skill) {
                         *count = count.saturating_sub(1);
                     }
                 }

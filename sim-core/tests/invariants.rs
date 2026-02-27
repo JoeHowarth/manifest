@@ -181,6 +181,7 @@ fn invariant_labor_assignment_accounting_consistent() {
         pop.stocks.insert(GRAIN, 5.0);
         pop.desired_consumption_ema.insert(GRAIN, 1.0);
         pop.employed_at = Some(if i % 2 == 0 { farm_a.key } else { farm_b.key });
+        pop.employed_skill = Some(LABORER);
     }
 
     let s = world.settlements.get_mut(&settlement).unwrap();
@@ -442,6 +443,7 @@ fn invariant_closed_economy_tick_residual_near_zero() {
         pop.stocks.insert(GRAIN, 100.0);
         pop.desired_consumption_ema.insert(GRAIN, 1.0);
         pop.employed_at = Some(farm.key);
+        pop.employed_skill = Some(LABORER);
     }
 
     let s = world.settlements.get_mut(&settlement).unwrap();
@@ -545,6 +547,7 @@ fn invariant_open_economy_grain_accounting_balanced() {
         pop.stocks.insert(GRAIN, 50.0);
         pop.desired_consumption_ema.insert(GRAIN, 1.0);
         pop.employed_at = Some(farm.key);
+        pop.employed_skill = Some(LABORER);
     }
 
     let s = world.settlements.get_mut(&settlement).unwrap();
