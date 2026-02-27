@@ -70,7 +70,7 @@
 pub mod accounting;
 pub mod agents;
 pub mod consumption;
-pub mod determinism;
+mod determinism;
 pub mod external;
 pub mod geography;
 #[cfg(feature = "instrument")]
