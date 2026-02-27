@@ -4,6 +4,12 @@ use crate::agents::Stockpile;
 use crate::market::{Order, Side};
 use crate::types::{AgentId, FacilityHandle, GoodId, MerchantId, Price, SettlementId};
 
+// === PRODUCTION EMA CONSTANTS ===
+
+/// Retention factor for production EMA (1 − α where α = 0.3).
+/// Used both when blending new observations and when decaying stale entries.
+pub(crate) const PRODUCTION_EMA_RETAIN: f64 = 0.7;
+
 // === SUPPLY CURVE CONSTANTS ===
 
 const PRICE_SWEEP_MIN: f64 = 0.6;
@@ -80,7 +86,7 @@ impl MerchantAgent {
             .entry(good)
             .or_insert(quantity); // Initialize to first observation
         // Blend new production into EMA (α = 0.3 for responsiveness)
-        *ema = 0.7 * *ema + 0.3 * quantity;
+        *ema = PRODUCTION_EMA_RETAIN * *ema + (1.0 - PRODUCTION_EMA_RETAIN) * quantity;
     }
 
     /// Get expected production rate for a good at a settlement
@@ -167,5 +173,35 @@ mod tests {
 
         assert!(merchant.can_stockpile_at(a));
         assert!(!merchant.can_stockpile_at(b));
+    }
+
+    #[test]
+    fn production_ema_decays_to_near_zero_after_50_empty_ticks() {
+        let mut merchant = MerchantAgent::new(MerchantId::new(1));
+        let s = SettlementId::new(1);
+        let grain: GoodId = 1;
+
+        // Record production of 10.0 for 5 ticks to build up EMA
+        for _ in 0..5 {
+            merchant.record_production(s, grain, 10.0);
+        }
+        let ema_before = merchant.expected_production(s, grain);
+        assert!(ema_before > 9.0, "EMA should be near 10.0, got {ema_before}");
+
+        // Simulate 50 ticks of zero production via the decay path
+        for _ in 0..50 {
+            if let Some(goods_ema) = merchant.production_ema.get_mut(&s) {
+                goods_ema.retain(|_, ema| {
+                    *ema *= PRODUCTION_EMA_RETAIN;
+                    *ema > 0.001
+                });
+            }
+        }
+
+        let ema_after = merchant.expected_production(s, grain);
+        assert!(
+            ema_after < 0.05,
+            "EMA should have decayed to near zero after 50 empty ticks, got {ema_after}"
+        );
     }
 }

@@ -24,6 +24,8 @@ Hard-won insights from debugging sessions. Read at session start, prune if over 
 
 - **Merchant stockpile delays price recovery.** When wages deflate, merchants accumulate grain (paying less for labor). When employment crashes, the merchant keeps selling from stock for many ticks, suppressing the price rise that should trigger rehiring. The merchant's grain mountain is a key variable to watch in any price spiral investigation.
 
+- **Production EMA must decay when production stops.** If `record_production` is only called when output > 0, the EMA freezes at its last nonzero value when a facility goes idle (no workers/inputs). This inflates `expected_production` → inflates the stock buffer `target` → merchant holds inventory instead of selling. Fix: in the production phase, after recording actual output, decay EMA entries for goods that weren't produced (`ema *= 0.7`) and prune entries below 0.001.
+
 - **Compute the theoretical price floor before running.** For anchor params (world_price, spread_bps, transport_bps, tier_step_bps), calculate: `export_price_tier0 = world_price * (1 - (spread_bps + transport_bps) / 10000)`. Then verify the simulation price stabilizes near this value.
 
 ## Bid Adjustment & Monopsony
